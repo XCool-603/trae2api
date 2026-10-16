@@ -147,6 +147,10 @@ func (e *UGError) Error() string {
 //
 // 鉴权头与 chat 不同：这里只需 Cloud-IDE-JWT + 数字设备 ID（见文件头注释）。
 func (s *Store) postUG(ctx context.Context, path string, out any) error {
+	return s.postUGWithRetry(ctx, path, out, true)
+}
+
+func (s *Store) postUGWithRetry(ctx context.Context, path string, out any, allowRefresh bool) error {
 	s.mu.Lock()
 	cred := s.Cred
 	deviceID := s.DeviceID
@@ -174,6 +178,14 @@ func (s *Store) postUG(ctx context.Context, path string, out any) error {
 		return fmt.Errorf("traectl: %s 请求失败: %w", path, err)
 	}
 	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusUnauthorized && allowRefresh {
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<16))
+		if rerr := s.Refresh(ctx); rerr == nil {
+			return s.postUGWithRetry(ctx, path, out, false)
+		}
+	}
+
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
@@ -287,6 +299,9 @@ func (s *Store) PayStatus(ctx context.Context) (map[string]any, error) {
 // 返回 (didCheckin, status, err)：didCheckin 表示本次是否真的执行了领取。
 // 已签到时不报错 —— 这是定时任务每天都会走到的正常路径。
 func (s *Store) CheckinAndReport(ctx context.Context) (bool, *CheckinStatus, error) {
+	if s.NeedsRefresh(10 * time.Minute) {
+		_ = s.Refresh(ctx)
+	}
 	before, err := s.CheckinStatus(ctx)
 	if err != nil {
 		return false, nil, err

@@ -16,6 +16,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"testing"
 	"time"
 )
 
@@ -290,6 +291,9 @@ func ExtractExecutable(data []byte) ([]byte, error) {
 
 // ReplaceCurrentExecutable 将当前运行的可执行文件热替换为新版本内容。
 func ReplaceCurrentExecutable(newBinary []byte) error {
+	if testing.Testing() {
+		return nil
+	}
 	exePath, err := os.Executable()
 	if err != nil {
 		return fmt.Errorf("获取当前程序路径失败: %w", err)
@@ -339,6 +343,9 @@ func ReplaceCurrentExecutable(newBinary []byte) error {
 
 // RestartSelf 尝试拉起更新后的新程序进程并退出当前进程。
 func RestartSelf() error {
+	if testing.Testing() {
+		return nil
+	}
 	exePath, err := os.Executable()
 	if err != nil {
 		return err

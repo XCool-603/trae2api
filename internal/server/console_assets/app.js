@@ -592,12 +592,57 @@ async function batchDelete() {
 }
 
 async function runBatchSignin() {
+  var btn = $('btnBatchSignin');
+  var txt = $('btnBatchSigninText');
+  var oldTxt = txt ? txt.innerText : '日常签到';
+  if (btn) btn.disabled = true;
+  if (txt) txt.innerText = '正在签到...';
+  toast('正在向上游请求全账号签到，请稍候...', 'info');
+
   try {
     var r = await post('admin/checkin');
-    toast('签到完成：新签 ' + num(r.checked) + '，已签 ' + num(r.already) +
-      '，失败 ' + num(r.failed) + '，禁用 ' + num(r.disabled), num(r.failed) ? 'warn' : 'ok');
+    var totalCredits = 0;
+    if (r.results && Array.isArray(r.results)) {
+      for (var i = 0; i < r.results.length; i++) {
+        totalCredits += (r.results[i].credits || 0);
+      }
+    }
+
+    var msg = '';
+    if (r.checked > 0) {
+      msg = '签到完成：成功新签 ' + num(r.checked) + ' 个账号' + (totalCredits > 0 ? '（+' + totalCredits + ' 积分）' : '') +
+        (r.already > 0 ? '，' + num(r.already) + ' 个今日已签' : '');
+    } else if (r.already > 0 && !r.failed) {
+      msg = '今日均已签到（共 ' + num(r.already) + ' 个账号今日已签过，Trae 每天限签 1 次，无需重复签到）';
+    } else {
+      msg = '签到完成：新签 ' + num(r.checked) + '，已签 ' + num(r.already);
+    }
+
+    if (r.failed > 0) {
+      msg += '，失败 ' + num(r.failed) + ' 个';
+      var failedDetails = [];
+      if (r.results) {
+        for (var j = 0; j < r.results.length; j++) {
+          if (r.results[j].status === 'failed') {
+            failedDetails.push((r.results[j].label || r.results[j].uid) + ': ' + (r.results[j].detail || '未知原因'));
+          }
+        }
+      }
+      if (failedDetails.length) {
+        msg += '\n失败详情：' + failedDetails.slice(0, 3).join('; ');
+      }
+    }
+    if (r.disabled > 0) {
+      msg += '，停用跳过 ' + num(r.disabled);
+    }
+    toast(msg, r.failed > 0 ? 'warn' : 'ok');
     await refreshData();
-  } catch (e) { toast('签到失败：' + errText(e), 'err'); }
+  } catch (e) {
+    toast('签到失败：' + errText(e), 'err');
+  } finally {
+    if (btn) btn.disabled = false;
+    if (txt) txt.innerText = oldTxt;
+  }
 }
 async function refreshCredits() {
   try {

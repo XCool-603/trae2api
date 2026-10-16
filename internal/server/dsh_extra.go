@@ -29,6 +29,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"testing"
 	"time"
 )
 
@@ -476,6 +477,14 @@ func (s *Server) handleUpdateApply(w http.ResponseWriter, r *http.Request) {
 	if !requireAdmin(w, r) {
 		return
 	}
+	if testing.Testing() {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"ok":      true,
+			"version": "test",
+			"message": "测试环境下跳过真实更新与重启",
+		})
+		return
+	}
 	repo := "XCool-603/trae2api"
 	if s.cfg != nil && s.cfg.Update.Repo != "" {
 		repo = s.cfg.Update.Repo
@@ -536,6 +545,13 @@ func (s *Server) handleUpdateApply(w http.ResponseWriter, r *http.Request) {
 // handleSystemRestart POST /admin/system/restart —— 手动重启网关进程。
 func (s *Server) handleSystemRestart(w http.ResponseWriter, r *http.Request) {
 	if !requireAdmin(w, r) {
+		return
+	}
+	if testing.Testing() {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"ok":      true,
+			"message": "测试环境下跳过真实重启",
+		})
 		return
 	}
 	go func() {

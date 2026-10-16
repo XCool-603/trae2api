@@ -34,7 +34,7 @@
               PRO
             </span>
             <button id="versionBadgeBtn" onclick="checkAppUpdate(true)" title="点击检查更新" class="px-2 py-0.5 text-[10px] font-mono rounded-full bg-slate-800 text-slate-400 border border-slate-700 hover:border-indigo-500 transition flex items-center gap-1">
-              <span id="appVersionText">0.2.1</span>
+              <span id="appVersionText">0.2.2</span>
               <span id="updateAvailableDot" class="w-1.5 h-1.5 rounded-full bg-amber-400 animate-ping hidden"></span>
             </button>
           </div>
@@ -280,9 +280,9 @@
               <svg class="w-3.5 h-3.5 text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>
               <span>全量导出</span>
             </button>
-            <button onclick="runBatchSignin()" class="px-3 py-1.5 bg-indigo-500/10 hover:bg-indigo-500/20 text-indigo-400 hover:text-indigo-300 border border-indigo-500/30 rounded-xl text-xs font-medium transition flex items-center gap-1.5">
-              <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
-              <span>日常签到</span>
+            <button id="btnBatchSignin" onclick="runBatchSignin()" class="px-3 py-1.5 bg-indigo-500/10 hover:bg-indigo-500/20 text-indigo-400 hover:text-indigo-300 border border-indigo-500/30 rounded-xl text-xs font-medium transition flex items-center gap-1.5 disabled:opacity-50 disabled:cursor-not-allowed">
+              <svg id="btnBatchSigninIcon" class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+              <span id="btnBatchSigninText">日常签到</span>
             </button>
           </div>
         </div>
@@ -1321,7 +1321,7 @@ eyJhbGciOi...----refresh_token_here'></textarea>
       <div id="updateStateResult" class="space-y-4 hidden">
         <div class="flex items-center justify-between p-3.5 bg-slate-900/60 rounded-xl border border-slate-800">
           <div>
-            <div class="text-xs text-slate-400">当前版本: <span id="updateModalCurVer" class="font-mono text-slate-200">0.2.1</span></div>
+            <div class="text-xs text-slate-400">当前版本: <span id="updateModalCurVer" class="font-mono text-slate-200">0.2.2</span></div>
             <div class="text-sm font-bold text-white mt-0.5">最新版本: <span id="updateModalLatestVer" class="font-mono text-indigo-400">—</span></div>
           </div>
           <div id="updateStatusBadge" class="text-xs font-semibold px-3 py-1 rounded-full"></div>
@@ -1332,7 +1332,7 @@ eyJhbGciOi...----refresh_token_here'></textarea>
         <div id="updateDockerTip" class="p-3 bg-amber-500/10 border border-amber-500/20 rounded-xl text-amber-300 text-xs leading-relaxed hidden">
           🐳 <b>检测到当前为 Docker 容器部署：</b><br>
           在宿主机执行以下命令即可平滑更新，数据自动保留：<br>
-          <code class="block mt-1 p-2 bg-slate-900 rounded font-mono text-[11px] text-amber-200 select-all">git pull origin main && docker compose up -d --build --build</code>
+          <code class="block mt-1 p-2 bg-slate-900 rounded font-mono text-[11px] text-amber-200 select-all">git pull origin main && docker compose up -d --build --force-recreate</code>
         </div>
 
         <div id="updateErrorMsg" class="text-xs text-rose-400 font-mono hidden"></div>
