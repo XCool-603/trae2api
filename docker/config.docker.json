@@ -4,12 +4,12 @@
   "data_dir": "/app/data",
 
   "pool": {
-    "max_in_flight": 3,
+    "max_in_flight": 8,
     "breaker_threshold": 3,
     "breaker_cooldown": "30m",
     "idle_weight_per_hour": 0.5,
     "idle_weight_max": 5.0,
-    "pick_gap": "100ms"
+    "pick_gap": "0s"
   },
 
   "cooldown": {

@@ -23,6 +23,7 @@
     { "role": "backend-dsh", "criterion": "C11", "method": "POST", "path": "/admin/dsh/reset", "auth": "admin", "body": {} },
     { "role": "backend-dsh", "criterion": "C11", "method": "GET", "path": "/admin/dsh/export", "auth": "admin" },
     { "role": "backend-dsh", "criterion": "D", "method": "GET", "path": "/admin/system/update/check", "auth": "admin" },
+    { "role": "backend-dsh", "criterion": "D", "method": "POST", "path": "/admin/system/update/apply", "auth": "admin", "body": {} },
 
     { "role": "console-ui", "criterion": "C12", "method": "GET", "path": "/healthz", "auth": "public" },
     { "role": "console-ui", "criterion": "C12", "method": "GET", "path": "/v1/models", "auth": "admin" },

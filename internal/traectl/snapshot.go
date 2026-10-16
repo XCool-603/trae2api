@@ -28,6 +28,8 @@ type CredentialSnapshot struct {
 	Product string `json:"product"`
 	// Label 人类可读标签。
 	Label string `json:"label,omitempty"`
+	// Proxy 该账号专用的出站代理地址（http/https/socks5）。
+	Proxy string `json:"proxy,omitempty"`
 	// UserID Trae 账号 ID（数字字符串）。
 	UserID string `json:"userId"`
 
@@ -63,6 +65,7 @@ func (s *Store) ExportSnapshot() *CredentialSnapshot {
 		Version:          snapshotVersion,
 		Product:          s.Product.Key,
 		Label:            s.label,
+		Proxy:            s.proxy,
 		UserID:           s.Cred.UserID,
 		Token:            s.Cred.Token,
 		RefreshToken:     s.Cred.RefreshToken,

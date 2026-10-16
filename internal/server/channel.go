@@ -66,6 +66,7 @@ type accountSpec struct {
 	owner       string
 	maxInFlight int
 	disabled    bool
+	proxy       string
 }
 
 // newTraeClient 是 traectl.Client 的**唯一构造点**。
@@ -114,6 +115,7 @@ func resolveSpecs(cfg *config.Config) []accountSpec {
 			out = append(out, accountSpec{
 				product: p, storagePath: a.StoragePath, label: a.Label,
 				owner: a.Owner, maxInFlight: a.MaxInFlight, disabled: a.Disabled,
+				proxy: a.Proxy,
 			})
 		}
 		return out
@@ -213,6 +215,9 @@ func checkCredWritable(path string) {
 // 失败容忍：单个账号打开失败只记 WARN 并跳过（用户可能只装了其中一个产品，
 // 或某个快照路径暂时不可用），不因此让整个网关起不来。
 func BuildChannels(cfg *config.Config, p *pool.Pool, accStore *accountstore.Store) (map[string]*Channel, error) {
+	if cfg != nil {
+		traectl.SetGlobalProxy(cfg.Trae.Proxy)
+	}
 	specs := resolveSpecs(cfg)
 
 	// 追加便携快照（去重：同一 product+userId 只留一份，快照优先于 config 里的同账号）
@@ -232,6 +237,7 @@ func BuildChannels(cfg *config.Config, p *pool.Pool, accStore *accountstore.Stor
 				storagePath: e.Path,
 				label:       e.Snap.Label,
 				owner:       "public",
+				proxy:       e.Snap.Proxy,
 			})
 		}
 	}
@@ -295,9 +301,12 @@ func BuildChannels(cfg *config.Config, p *pool.Pool, accStore *accountstore.Stor
 		if label == "" {
 			label = s.product.Label
 		}
+		if s.proxy != "" {
+			store.SetProxy(s.proxy)
+		}
 		a := &pool.Account{
 			UID: uid, Realm: rk, Label: label, Product: s.product,
-			Owner: s.owner, Store: store,
+			Owner: s.owner, Store: store, Proxy: s.proxy,
 		}
 		p.Add(a)
 		if s.disabled {
@@ -367,6 +376,7 @@ func (c *Channel) Account(uid string) *pool.Account {
 func (c *Channel) ClientFor(a *pool.Account) *traectl.Client {
 	cl := *c.client
 	cl.Store = a.Store
+	cl.Proxy = a.Proxy
 	return &cl
 }
 

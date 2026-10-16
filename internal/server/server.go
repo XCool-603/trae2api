@@ -91,7 +91,7 @@ func newPromptRewriter(cfg *config.Config) *prompt.Rewriter {
 // 二进制 `version` 却报 0.1.0。发布流程从没跑过，所以一直没人发现。
 //
 // 这个默认值是**本地 go build 出来的**二进制会报的版本（不含 tag 信息）。
-var Version = "0.1.0"
+var Version = "0.2.1"
 
 // ServiceName 网关身份标识（/healthz 透出，便于宿主识别"假成功"）。
 const ServiceName = "trae2api"
@@ -318,6 +318,7 @@ func (s *Server) handler() http.Handler {
 	mux.HandleFunc("POST /admin/accounts/{uid}/disable", s.withAuth(s.handleSetDisabled(true)))
 	mux.HandleFunc("POST /admin/accounts/{uid}/enable", s.withAuth(s.handleSetDisabled(false)))
 	mux.HandleFunc("POST /admin/accounts/{uid}/test", s.withAuth(s.handleAccountTest))
+	mux.HandleFunc("POST /admin/accounts/{uid}/proxy", s.withAuth(s.handleAccountProxy))
 	// OAuth 一键登录
 	mux.HandleFunc("POST /admin/login/start", s.withAuth(s.handleLoginStart))
 	mux.HandleFunc("GET /admin/login/status", s.withAuth(s.handleLoginStatus))
@@ -381,6 +382,8 @@ func (s *Server) handler() http.Handler {
 	// 而控制台在还没有凭证时就会调它（页面加载 2 秒后拉版本号），挂鉴权会让
 	// "检查更新"模态先报一次失败 —— 那正是要修掉的症状。
 	mux.HandleFunc("GET /admin/system/update/check", s.handleUpdateCheck)
+	mux.HandleFunc("POST /admin/system/update/apply", s.withAuth(s.handleUpdateApply))
+	mux.HandleFunc("POST /admin/system/restart", s.withAuth(s.handleSystemRestart))
 	mux.HandleFunc("POST /admin/system/allow_register", s.withAuth(s.handleSetAllowRegister))
 	mux.HandleFunc("POST /auth/register", s.handleRegister)
 	mux.HandleFunc("POST /auth/login", s.handleLogin)

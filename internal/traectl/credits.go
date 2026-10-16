@@ -167,8 +167,10 @@ func (s *Store) postUG(ctx context.Context, path string, out any) error {
 	// 与 chat 保持一致的 UA：上游按 UA 做机器人识别，Go 默认 UA 会被拦。
 	req.Header.Set("User-Agent", defaultUserAgent)
 
-	resp, err := httpClient.Do(req)
+	cl := s.httpClient()
+	resp, err := cl.Do(req)
 	if err != nil {
+		closeIdleOnFailure(cl.Transport)
 		return fmt.Errorf("traectl: %s 请求失败: %w", path, err)
 	}
 	defer resp.Body.Close()

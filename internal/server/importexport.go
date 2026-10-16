@@ -372,14 +372,20 @@ func (s *Server) registerAccount(snap *traectl.CredentialSnapshot, path string) 
 	if ch.Account(uid) != nil {
 		// 已存在：只更新凭据（refreshToken 轮换后重新导入是常见操作）
 		if a := ch.Account(uid); a != nil && a.Store != nil {
+			if snap.Proxy != "" {
+				a.SetProxy(snap.Proxy)
+			}
 			if err := a.Store.Load(); err != nil {
 				return fmt.Errorf("刷新既有账号凭据失败: %w", err)
 			}
 		}
 		return nil
 	}
+	if snap.Proxy != "" {
+		store.SetProxy(snap.Proxy)
+	}
 	a := &pool.Account{
-		UID: uid, Realm: rk, Label: snap.Label, Product: prod, Owner: "public", Store: store,
+		UID: uid, Realm: rk, Label: snap.Label, Product: prod, Owner: "public", Store: store, Proxy: snap.Proxy,
 	}
 	s.pool.Add(a)
 	ch.mu.Lock()
@@ -401,6 +407,7 @@ func (s *Server) handleAccountsList(w http.ResponseWriter, r *http.Request) {
 			"file":             e.Name,
 			"product":          e.Snap.Product,
 			"label":            e.Snap.Label,
+			"proxy":            e.Snap.Proxy,
 			"userId":           e.Snap.UserID,
 			"deviceId":         e.Snap.DeviceID,
 			"expiredAt":        e.Snap.ExpiredAt,

@@ -8,6 +8,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -30,6 +31,8 @@ type Account struct {
 	MaxInFlight int `json:"max_in_flight"`
 	// Disabled 初始禁用（保留凭证但不参与选号）。
 	Disabled bool `json:"disabled"`
+	// Proxy 该账号绑定的出站代理（支持 http/https/socks5，如 socks5://127.0.0.1:1080）。空 = 继承全局代理或系统代理。
+	Proxy string `json:"proxy"`
 }
 
 // Config 是 Trae2Api 的完整配置。
@@ -116,6 +119,9 @@ type Config struct {
 		// 而不是转上去让上游回一个笼统的 4001 —— 后者会让用户完全看不出
 		// 问题出在图片上。
 		VisionEnabled bool `json:"vision_enabled"`
+		// Proxy 全局出站代理（可选，支持 http/https/socks5，例如 "socks5://127.0.0.1:1080"）。
+		// 账号未单独配置 proxy 时默认使用此代理；留空则按环境变量系统代理。
+		Proxy string `json:"proxy"`
 	} `json:"trae"`
 
 	Schedule struct {
@@ -241,6 +247,13 @@ type Config struct {
 		// Secret 签名密钥（可选）。
 		Secret string `json:"secret"`
 	} `json:"webhook"`
+
+	Update struct {
+		// Enabled 是否启用自动更新检测（默认 true）。
+		Enabled bool `json:"enabled"`
+		// Repo GitHub 仓库名（形如 owner/repo，默认 "XCool-603/trae2api"）。
+		Repo string `json:"repo"`
+	} `json:"update"`
 }
 
 // Default 返回内置默认配置。
@@ -249,12 +262,12 @@ func Default() *Config {
 		Listen:  "127.0.0.1:7870",
 		DataDir: "./data",
 	}
-	c.Pool.MaxInFlight = 3
+	c.Pool.MaxInFlight = 8
 	c.Pool.BreakerThreshold = 3
 	c.Pool.BreakerCooldown = "30m"
 	c.Pool.IdleWeightPerHour = 0.5
 	c.Pool.IdleWeightMax = 5.0
-	c.Pool.PickGap = "100ms"
+	c.Pool.PickGap = "0s"
 	c.Cooldown.SoftRate = "600s"
 	c.Cooldown.SoftRateMax = "2h"
 	c.Cooldown.ModelCooldown = "600s"
@@ -296,6 +309,8 @@ func Default() *Config {
 	// 才会建渠道；找不到就记一条 WARN 跳过（BuildChannels 的既有行为）。
 	// 也就是说开着的代价仅仅是"多尝一次目录"，而不开则让境外用户多一步配置。
 	c.Intl.Enabled = true
+	c.Update.Enabled = true
+	c.Update.Repo = "XCool-603/trae2api"
 	return c
 }
 
@@ -398,6 +413,10 @@ func (c *Config) normalize() error {
 	if _, err := c.StickyTTL(); err != nil {
 		return err
 	}
+	// 代理 URL 校验（全局与账号级）
+	if err := validateProxyURL(c.Trae.Proxy); err != nil {
+		return fmt.Errorf("config: trae.proxy 非法: %w", err)
+	}
 	// 账号合法性：产品 key 必须是已知值
 	for i := range c.Trae.Accounts {
 		a := &c.Trae.Accounts[i]
@@ -412,6 +431,9 @@ func (c *Config) normalize() error {
 		if a.Owner == "" {
 			a.Owner = "public"
 		}
+		if err := validateProxyURL(a.Proxy); err != nil {
+			return fmt.Errorf("config: trae.accounts[%d].proxy 非法: %w", i, err)
+		}
 	}
 	// 控制台密码长度：太短的密码等于没有保护，且给了用户"我设了密码"的错觉
 	if err := ValidateWebPassword(c.WebPassword); err != nil {
@@ -421,6 +443,30 @@ func (c *Config) normalize() error {
 	//（静默回落会让用户以为配置生效了，实际没改）
 	if _, err := prompt.ParseMode(c.Prompt.Mode); err != nil {
 		return fmt.Errorf("config: %w", err)
+	}
+	if strings.TrimSpace(c.Update.Repo) == "" {
+		c.Update.Repo = "XCool-603/trae2api"
+	}
+	return nil
+}
+
+// validateProxyURL 校验代理 URL 格式与协议（支持 http/https/socks5）。
+func validateProxyURL(raw string) error {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil
+	}
+	u, err := url.Parse(raw)
+	if err != nil {
+		return fmt.Errorf("URL 解析失败: %w", err)
+	}
+	switch strings.ToLower(u.Scheme) {
+	case "http", "https", "socks5", "socks5h":
+	default:
+		return fmt.Errorf("不支持的代理协议 %q (仅支持 http / https / socks5)", u.Scheme)
+	}
+	if u.Host == "" {
+		return fmt.Errorf("代理 URL 缺少主机地址")
 	}
 	return nil
 }
@@ -462,9 +508,13 @@ func (c *Config) ModelCooldownDur() (time.Duration, error) {
 	return c.dur(c.Cooldown.ModelCooldown, "600s", "cooldown.model_cooldown")
 }
 
-// PickGapDur 选号最小间隔（防惊群）。
+// PickGapDur 选号最小间隔（防惊群）。0 或空表示不设间隔（降低延迟）。
 func (c *Config) PickGapDur() (time.Duration, error) {
-	return c.dur(c.Pool.PickGap, "100ms", "pool.pick_gap")
+	v := strings.TrimSpace(c.Pool.PickGap)
+	if v == "" || v == "0" || v == "0s" || v == "0ms" {
+		return 0, nil
+	}
+	return c.dur(c.Pool.PickGap, "0s", "pool.pick_gap")
 }
 
 // StickyTTL 会话粘性有效期。

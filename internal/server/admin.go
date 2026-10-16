@@ -1,8 +1,14 @@
 package server
 
 import (
+	"encoding/json"
+	"io"
 	"net/http"
+	"net/url"
+	"strings"
 	"time"
+
+	"trae2api/internal/traectl"
 )
 
 // 本文件提供额度与签到相关的 HTTP 端点。
@@ -254,3 +260,46 @@ func (s *Server) handleAccountTest(w http.ResponseWriter, r *http.Request) {
 		"message":    "连通正常，额度已同步",
 	})
 }
+
+// handleAccountProxy POST /admin/accounts/{uid}/proxy —— 动态设置账号代理。
+func (s *Server) handleAccountProxy(w http.ResponseWriter, r *http.Request) {
+	if !requireAdmin(w, r) {
+		return
+	}
+	uid := r.PathValue("uid")
+	if uid == "" {
+		writeOpenAIError(w, http.StatusBadRequest, "invalid_request", "缺少账号 uid")
+		return
+	}
+	a := s.pool.Get(uid)
+	if a == nil {
+		writeOpenAIError(w, http.StatusNotFound, "account_not_found", "账号不存在: "+uid)
+		return
+	}
+	var req struct {
+		Proxy string `json:"proxy"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil && err != io.EOF {
+		writeOpenAIError(w, http.StatusBadRequest, "invalid_json", "请求体不是合法 JSON")
+		return
+	}
+	proxyURL := strings.TrimSpace(req.Proxy)
+	if proxyURL != "" {
+		u, err := url.Parse(proxyURL)
+		if err != nil || (u.Scheme != "http" && u.Scheme != "https" && u.Scheme != "socks5" && u.Scheme != "socks5h") || u.Host == "" {
+			writeOpenAIError(w, http.StatusBadRequest, "invalid_proxy", "代理 URL 非法（仅支持 http/https/socks5，需含主机名）")
+			return
+		}
+	}
+	s.pool.SetProxy(uid, proxyURL)
+	if a.Store != nil && a.Store.Mode() == traectl.ModeSnapshot {
+		_ = a.Store.Save()
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"ok":      true,
+		"uid":     uid,
+		"proxy":   proxyURL,
+		"message": "账号代理已更新",
+	})
+}
+

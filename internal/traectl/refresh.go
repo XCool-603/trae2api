@@ -125,6 +125,40 @@ func (e *RefreshError) IsDeviceError() bool {
 // （半死 h2 流复用是"莫名卡住"的常见来源）。详见 transport.go。
 var httpClient = newHTTPClient(30 * time.Second)
 
+var (
+	refreshProxyMu      sync.RWMutex
+	refreshProxyClients = map[string]*http.Client{}
+)
+
+func proxyRefreshClient(proxyURL string) *http.Client {
+	proxyURL = strings.TrimSpace(proxyURL)
+	if proxyURL == "" {
+		gp := GlobalProxy()
+		if gp == "" {
+			return httpClient
+		}
+		proxyURL = gp
+	}
+	refreshProxyMu.RLock()
+	cl, ok := refreshProxyClients[proxyURL]
+	refreshProxyMu.RUnlock()
+	if ok {
+		return cl
+	}
+	refreshProxyMu.Lock()
+	defer refreshProxyMu.Unlock()
+	if cl, ok := refreshProxyClients[proxyURL]; ok {
+		return cl
+	}
+	cl = newHTTPClientWithProxy(30*time.Second, proxyURL)
+	refreshProxyClients[proxyURL] = cl
+	return cl
+}
+
+func (s *Store) httpClient() *http.Client {
+	return proxyRefreshClient(s.Proxy())
+}
+
 // refreshMu 保证同一 Store 的续期串行 —— refreshToken 是**轮换语义**，
 // 并发刷新会让后一次用已失效的旧 refreshToken 去换，导致整个账号掉线。
 // 键为 *Store，值为 *sync.Mutex（按 Store 惰性创建）。
@@ -237,11 +271,12 @@ func (s *Store) Refresh(ctx context.Context) error {
 	// 服务端判成另一条鉴权分支并返回 20405。
 	req.Header.Set("x-cloudide-token", "")
 
-	resp, err := httpClient.Do(req)
+	cl := s.httpClient()
+	resp, err := cl.Do(req)
 	if err != nil {
 		// 必须是 TransportError：上层据此判定"这是网络问题、不是账号问题"，
 		// 从而不去硬冷却账号。返回普通 error 会丢掉这个语义。
-		closeIdleOnFailure(httpClient.Transport)
+		closeIdleOnFailure(cl.Transport)
 		return &TransportError{Op: "refresh", Err: err}
 	}
 	defer resp.Body.Close()

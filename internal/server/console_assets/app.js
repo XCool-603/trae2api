@@ -407,6 +407,7 @@ function renderAccounts(accounts) {
     var revivable = a.disabled || a.cooling || a.breaker || a.degraded || Object.keys(a.model_cooling || {}).length > 0;
     var actions = '<div class="flex items-center justify-end gap-1.5">';
     actions += '<button onclick="testAccount(\'' + escapeHtml(uid) + '\')" title="发起连通性与额度测速探针" class="px-2 py-1 rounded-lg text-xs font-medium text-cyan-400 hover:text-cyan-300 hover:bg-cyan-500/10 border border-transparent hover:border-cyan-500/30 transition">测速</button>';
+    actions += '<button onclick="setAccountProxy(\'' + escapeHtml(uid) + '\',\'' + escapeHtml(a.proxy || '') + '\')" title="配置该账号独立出口代理（HTTP/SOCKS5）" class="px-2 py-1 rounded-lg text-xs font-medium text-amber-400 hover:text-amber-300 hover:bg-amber-500/10 border border-transparent hover:border-amber-500/30 transition">代理</button>';
     if (revivable) {
       actions += '<button onclick="controlAccount(\'' + escapeHtml(uid) + '\',\'revive\')" title="清冷却 + 清熔断 + 清连败 + 清降权 + 清模型级冷却" class="px-2 py-1 rounded-lg text-xs font-medium text-amber-400 hover:text-amber-300 hover:bg-amber-500/10 border border-transparent hover:border-amber-500/30 transition">复活</button>';
     }
@@ -428,7 +429,9 @@ function renderAccounts(accounts) {
       '<td class="px-6 py-4"><div class="flex flex-col gap-1.5 items-start">' + realmBadge(a) +
       '<span class="text-[10px] text-slate-500 font-sans truncate max-w-[100px]">' + escapeHtml(a.label || '') + '</span></div></td>' +
       '<td class="px-6 py-4"><div class="font-sans font-semibold text-white text-xs flex items-center"><span>' + escapeHtml(a.label || uid) + '</span>' + ownerTag + '</div>' +
-      '<div class="text-[11px] text-slate-500 font-mono mt-0.5">' + escapeHtml(uid) + '</div>' + modelCoolingBadges(a) + '</td>' +
+      '<div class="text-[11px] text-slate-500 font-mono mt-0.5">' + escapeHtml(uid) + '</div>' +
+      (a.proxy ? '<div class="text-[10px] text-amber-400 font-mono mt-0.5 flex items-center gap-1" title="独立出口代理: ' + escapeHtml(a.proxy) + '"><span>⚡ 代理: ' + escapeHtml(a.proxy) + '</span></div>' : '') +
+      modelCoolingBadges(a) + '</td>' +
       '<td class="px-6 py-4">' + accountStatusBadge(a) +
       '<div class="text-[10px] text-slate-500 font-mono mt-1">在途 ' + num(a.in_flight) + '/' + num(a.max_in_flight) +
       ' · 成功/失败 ' + num(a.ok_count) + '/' + num(a.err_count) + '</div></td>' +
@@ -513,6 +516,18 @@ async function testAccount(uid) {
     }
   } catch (e) {
     toast('测速异常：' + errText(e), 'err');
+  }
+}
+
+async function setAccountProxy(uid, currentProxy) {
+  var p = prompt('请输入账号 [' + uid + '] 专用的出口代理 URL\n支持 http / https / socks5 (例如 socks5://127.0.0.1:1080)；留空表示使用全局/系统代理:', currentProxy || '');
+  if (p === null) return;
+  try {
+    var r = await post('admin/accounts/' + encodeURIComponent(uid) + '/proxy', { proxy: p.trim() });
+    toast(r.message || '代理已更新', 'ok');
+    await refreshData();
+  } catch (e) {
+    toast('设置代理失败：' + errText(e), 'err');
   }
 }
 
@@ -2340,9 +2355,54 @@ async function checkAppUpdate(isManual) {
     }
   }
 }
-function triggerAppUpdate() {
-  // 绝不调用 /ui/system/update/do：本项目没有发布渠道与签名产物。
-  toast('本项目未配置发布渠道（无 release 仓库与签名产物），无法自动更新。\n请用 git pull + 重新构建（或 docker compose up -d --build）升级。', 'warn');
+async function triggerAppUpdate() {
+  var btn = $('btnDoUpdate');
+  if (btn) {
+    btn.disabled = true;
+    btn.innerText = '正在下载并更新...';
+  }
+  var successEl = $('updateSuccessMsg');
+  var errorEl = $('updateErrorMsg');
+  if (successEl) successEl.classList.add('hidden');
+  if (errorEl) errorEl.classList.add('hidden');
+
+  try {
+    var res = await api('admin/system/update/apply', { method: 'POST' });
+    if (successEl) {
+      successEl.innerText = res.message || '更新完成！服务正在重启...';
+      successEl.classList.remove('hidden');
+    }
+    toast(res.message || '更新成功！网关正在自动重启...', 'ok');
+    if (btn) btn.innerText = '正在重启服务...';
+    // 轮询健康检查，一旦重启成功自动刷新页面
+    var pollCount = 0;
+    var timer = setInterval(async function () {
+      pollCount++;
+      try {
+        var r = await fetch('/healthz');
+        if (r.ok) {
+          clearInterval(timer);
+          toast('网关已成功重启到新版本！', 'ok');
+          setTimeout(function () { location.reload(); }, 1200);
+        }
+      } catch (e) {
+        if (pollCount > 30) {
+          clearInterval(timer);
+          toast('重启等待超时，请手动确认网关运行状态', 'warn');
+        }
+      }
+    }, 1000);
+  } catch (e) {
+    if (btn) {
+      btn.disabled = false;
+      btn.innerText = '一键自动更新';
+    }
+    if (errorEl) {
+      errorEl.innerText = '自动更新失败：' + errText(e);
+      errorEl.classList.remove('hidden');
+    }
+    toast('更新失败：' + errText(e), 'err');
+  }
 }
 
 // ---------------------------------------------------------------- 启动

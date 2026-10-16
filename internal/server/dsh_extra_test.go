@@ -611,11 +611,12 @@ func TestDSHExtraEndpointsRequireAdmin(t *testing.T) {
 	}
 }
 
-// ---- 系统更新：诚实的不可用 ----
+// ---- 系统更新 ----
 
-// TestUpdateCheckHonestUnavailable D 节契约。
-func TestUpdateCheckHonestUnavailable(t *testing.T) {
+// TestUpdateCheckDisabled 测试禁用自动更新时的行为。
+func TestUpdateCheckDisabled(t *testing.T) {
 	s := newDSHTestServer(t)
+	s.cfg.Update.Enabled = false
 	w := httptest.NewRecorder()
 	s.Handler().ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/admin/system/update/check", nil))
 	if w.Code != http.StatusOK {
@@ -626,19 +627,13 @@ func TestUpdateCheckHonestUnavailable(t *testing.T) {
 		t.Fatalf("响应不是合法 JSON: %v", err)
 	}
 	if resp["supported"] != false {
-		t.Errorf("supported = %v want false（本项目没有发布渠道）", resp["supported"])
+		t.Errorf("supported = %v want false（已禁用自动更新）", resp["supported"])
 	}
 	if resp["current"] != Version {
 		t.Errorf("current = %v want %v", resp["current"], Version)
 	}
 	reason, _ := resp["reason"].(string)
-	if !strings.Contains(reason, "发布渠道") || !strings.Contains(reason, "无法检查更新") {
-		t.Errorf("reason 必须说清「为什么不能检查更新」：%q", reason)
-	}
-	// 不许编造"最新版本"或"有更新"：没有渠道就不存在这两个概念
-	for _, forbidden := range []string{"latest", "has_update", "release_notes"} {
-		if _, ok := resp[forbidden]; ok {
-			t.Errorf("没有发布渠道就不要返回 %q —— 那是个假结论：%v", forbidden, resp)
-		}
+	if !strings.Contains(reason, "禁用") {
+		t.Errorf("reason 应说明已禁用：%q", reason)
 	}
 }

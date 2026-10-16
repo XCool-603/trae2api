@@ -290,6 +290,9 @@ type Store struct {
 
 	// label 仅快照模式使用（多账号时便于区分）。
 	label string
+
+	// proxy 出站代理地址（http/https/socks5；空 = 走全局/直连）。
+	proxy string
 }
 
 // Mode 返回凭据文件形态（Load 之后有效）。
@@ -304,6 +307,20 @@ func (s *Store) Label() string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.label
+}
+
+// Proxy 返回快照或配置绑定的代理地址。
+func (s *Store) Proxy() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.proxy
+}
+
+// SetProxy 动态设置该凭据存储绑定的代理地址。
+func (s *Store) SetProxy(proxyURL string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.proxy = strings.TrimSpace(proxyURL)
 }
 
 // AppDataDir 返回本机 %APPDATA% 路径。
@@ -419,6 +436,7 @@ func (s *Store) loadSnapshotLocked(st map[string]json.RawMessage) error {
 	s.DeviceID = snap.DeviceID
 	s.MachineID = snap.MachineID
 	s.label = snap.Label
+	s.proxy = snap.Proxy
 	// 快照固定用 AES 信封（本网关自己的导出格式）
 	s.envType = EnvAES
 	s.extraAuth = nil
@@ -536,6 +554,7 @@ func (s *Store) saveSnapshotLocked() error {
 		Version:          snapshotVersion,
 		Product:          s.Product.Key,
 		Label:            s.label,
+		Proxy:            s.proxy,
 		UserID:           s.Cred.UserID,
 		Token:            s.Cred.Token,
 		RefreshToken:     s.Cred.RefreshToken,

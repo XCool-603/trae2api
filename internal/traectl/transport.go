@@ -4,6 +4,9 @@ import (
 	"crypto/tls"
 	"net"
 	"net/http"
+	"net/url"
+	"strings"
+	"sync"
 	"time"
 )
 
@@ -37,9 +40,9 @@ const (
 	// 只能干等到 Client.Timeout。
 	tlsHandshakeTimeout = 10 * time.Second
 
-	// idleConnTimeout 空闲连接池保留时长。90s → 30s：上游常主动掐闲置连接，
-	// 池里放 90s 的多半已死；30s 配 15s keepalive 足够识别。
-	idleConnTimeout = 30 * time.Second
+	// idleConnTimeout 空闲连接池保留时长。
+	// 从 30s 提升到 90s：避免正常思考停顿后频繁断连导致重新进行 1~2s 的 TLS 握手。
+	idleConnTimeout = 90 * time.Second
 
 	// responseHeaderTimeout 响应头到达的硬上限。
 	//
@@ -51,8 +54,8 @@ const (
 	// 从 2 分钟压到 1 分钟。
 	responseHeaderTimeout = 60 * time.Second
 
-	maxIdleConns        = 100
-	maxIdleConnsPerHost = 20
+	maxIdleConns        = 200
+	maxIdleConnsPerHost = 50
 )
 
 // newDialer 构造出站拨号器（参数集中，供测试回读）。
@@ -61,6 +64,42 @@ func newDialer() *net.Dialer {
 		Timeout:   dialTimeout,
 		KeepAlive: dialKeepAlive,
 	}
+}
+
+var (
+	globalProxyMu  sync.RWMutex
+	globalProxyURL string
+)
+
+// SetGlobalProxy 设置全局出站代理（留空表示使用系统环境变量代理）。
+func SetGlobalProxy(proxyURL string) {
+	globalProxyMu.Lock()
+	defer globalProxyMu.Unlock()
+	globalProxyURL = strings.TrimSpace(proxyURL)
+}
+
+// GlobalProxy 获取当前配置的全局代理。
+func GlobalProxy() string {
+	globalProxyMu.RLock()
+	defer globalProxyMu.RUnlock()
+	return globalProxyURL
+}
+
+func proxyFuncFor(proxyURL string) func(*http.Request) (*url.URL, error) {
+	proxyURL = strings.TrimSpace(proxyURL)
+	if proxyURL == "" {
+		gp := GlobalProxy()
+		if gp != "" {
+			if u, err := url.Parse(gp); err == nil {
+				return http.ProxyURL(u)
+			}
+		}
+		return http.ProxyFromEnvironment
+	}
+	if u, err := url.Parse(proxyURL); err == nil {
+		return http.ProxyURL(u)
+	}
+	return http.ProxyFromEnvironment
 }
 
 // newTransport 构造共享的出站 Transport。
@@ -77,10 +116,15 @@ func newDialer() *net.Dialer {
 // 必须 `make` 而不是留 nil：nil 的含义是"让标准库注入默认 h2 映射"，
 // 恰好是反效果。
 func newTransport() *http.Transport {
+	return newTransportWithProxy("")
+}
+
+// newTransportWithProxy 构造绑定了指定代理的 Transport。
+func newTransportWithProxy(proxyURL string) *http.Transport {
 	dialer := newDialer()
 	return &http.Transport{
-		Proxy:       http.ProxyFromEnvironment,
-		DialContext: dialer.DialContext,
+		Proxy:                 proxyFuncFor(proxyURL),
+		DialContext:           dialer.DialContext,
 		// 空映射（非 nil）真正禁 h2 —— 见函数注释
 		TLSNextProto:          make(map[string]func(string, *tls.Conn) http.RoundTripper),
 		TLSHandshakeTimeout:   tlsHandshakeTimeout,
@@ -120,8 +164,13 @@ func closeIdleOnFailure(rt http.RoundTripper) {
 // timeout <= 0 表示不设整体超时（长流场景由流中空闲监控负责，
 // 见 idle.go —— 用一个整体超时去管长流会误杀正常的长回复）。
 func newHTTPClient(timeout time.Duration) *http.Client {
+	return newHTTPClientWithProxy(timeout, "")
+}
+
+// newHTTPClientWithProxy 构造带指定代理与加固 Transport 的客户端。
+func newHTTPClientWithProxy(timeout time.Duration, proxyURL string) *http.Client {
 	return &http.Client{
 		Timeout:   timeout,
-		Transport: newTransport(),
+		Transport: newTransportWithProxy(proxyURL),
 	}
 }

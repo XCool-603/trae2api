@@ -477,20 +477,21 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		var acct *pool.Account
 		if attempt == 0 && stickyUID != "" {
 			if a := ch.Account(stickyUID); a != nil {
-				acct = a
+				if s.pool.Acquire(a.UID) {
+					acct = a
+				}
 			}
 		}
 		if acct == nil {
 			acct = s.pickWithWait(r.Context(), realmKey, bareModel, owners, tried)
-		}
-		if acct == nil {
-			break
+			if acct == nil {
+				break
+			}
+			if !s.pool.Acquire(acct.UID) {
+				continue // 在途已满：换一个账号
+			}
 		}
 		tried[acct.UID] = true
-
-		if !s.pool.Acquire(acct.UID) {
-			continue // 在途已满：换一个账号
-		}
 		if stickyKey != "" && s.sessions != nil && stickyUID == "" {
 			s.sessions.Bind(stickyKey, acct.UID)
 		}
@@ -631,6 +632,12 @@ func (s *Server) pickWithWait(ctx context.Context, realmKey, model string, owner
 		case <-ctx.Done():
 			// 客户端已断开：没必要再等
 			return nil
+		case <-s.pool.SlotNotify():
+			if a := s.pool.Pick(realmKey, model, owners, tried); a != nil {
+				s.logf("INFO: 收到名额释放通知，排队 %.2fs 后取得名额",
+					time.Since(deadline.Add(-pickWaitTimeout)).Seconds())
+				return a
+			}
 		case <-t.C:
 			if a := s.pool.Pick(realmKey, model, owners, tried); a != nil {
 				s.logf("INFO: 账号名额已满，排队 %.1fs 后取得名额",
@@ -768,6 +775,12 @@ func (s *Server) streamChat(w http.ResponseWriter, ctx context.Context, cl *trae
 		// 工具调用**先缓冲不发出**（见文件末尾的 truncation 说明）：
 		// SSE 被截断时 arguments 会只剩半截 JSON，原样发给客户端会让它
 		// 解析失败并卡死会话。所以攒齐、校验、再一次性发出。
+		// 但工具调用同样是模型的有效输出，计入首字节时间并定期发送心跳保活。
+		if len(d.ToolCalls) > 0 && firstByte {
+			firstByte = false
+			st.ttfb = time.Since(st.start)
+			st.ttfbSet = true
+		}
 		for _, tc := range d.ToolCalls {
 			buf := toolBuf[tc.Index]
 			if buf == nil {
@@ -781,6 +794,12 @@ func (s *Server) streamChat(w http.ResponseWriter, ctx context.Context, cl *trae
 				buf.name = tc.Name
 			}
 			buf.args.WriteString(tc.Args)
+		}
+		if len(d.ToolCalls) > 0 {
+			fmt.Fprint(w, ": keepalive\n\n")
+			if flusher != nil {
+				flusher.Flush()
+			}
 		}
 		if d.Usage != nil {
 			usage = d.Usage

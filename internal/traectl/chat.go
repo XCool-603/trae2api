@@ -174,6 +174,8 @@ type Client struct {
 	IdleTimeout time.Duration
 	// OnRefresh 在续期成功后回调（用于日志/指标）。
 	OnRefresh func(product string, expiresAt string)
+	// Proxy 该账号专用的出站代理地址（http/https/socks5；空 = 走全局/系统代理）。
+	Proxy string
 }
 
 // ⚠️ Client **不能**持有 sync.Once / http.Client 这类带状态的字段。
@@ -183,14 +185,16 @@ type Client struct {
 // go vet 会报 "assignment copies lock value"，运行时则是数据竞争，
 // 且每个副本会各自建一个 Transport（连接池不共享）。
 //
-// 而所有账号打的是**同一个上游主机**，连接池本就该共享。所以 HTTP 客户端
-// 放在包级，与 Client 实例解耦。
+// 所有账号打上游主机时，同代理配置共用连接池。
 var (
 	chatClientOnce sync.Once
 	chatClientVal  *http.Client
+
+	chatProxyMu      sync.RWMutex
+	chatProxyClients = map[string]*http.Client{}
 )
 
-// sharedChatClient 返回全部渠道共用的聊天 HTTP 客户端。
+// sharedChatClient 返回全部渠道共用的默认聊天 HTTP 客户端。
 //
 // 不设整体 Timeout：长回复（推理模型思考几分钟）是常态，用一个总时长去管
 // 会误杀正常请求。超时由两层分别负责：
@@ -203,15 +207,41 @@ func sharedChatClient() *http.Client {
 	return chatClientVal
 }
 
+// proxyChatClient 获取或创建绑定指定代理的聊天客户端（连接池复用）。
+func proxyChatClient(proxyURL string) *http.Client {
+	proxyURL = strings.TrimSpace(proxyURL)
+	if proxyURL == "" {
+		gp := GlobalProxy()
+		if gp == "" {
+			return sharedChatClient()
+		}
+		proxyURL = gp
+	}
+	chatProxyMu.RLock()
+	cl, ok := chatProxyClients[proxyURL]
+	chatProxyMu.RUnlock()
+	if ok {
+		return cl
+	}
+	chatProxyMu.Lock()
+	defer chatProxyMu.Unlock()
+	if cl, ok := chatProxyClients[proxyURL]; ok {
+		return cl
+	}
+	cl = newHTTPClientWithProxy(0, proxyURL)
+	chatProxyClients[proxyURL] = cl
+	return cl
+}
+
 // client 返回共享的 HTTP 客户端。
 //
 // c.Timeout 若非零则单独构造一个（给"需要独立超时"的场景留口子），
-// 但**默认路径是共享的** —— 否则每次调用都新建 Transport，连接池失效。
+// 但**默认路径是按代理共享的** —— 否则每次调用都新建 Transport，连接池失效。
 func (c *Client) client() *http.Client {
 	if c.Timeout > 0 {
-		return newHTTPClient(c.Timeout)
+		return newHTTPClientWithProxy(c.Timeout, c.Proxy)
 	}
-	return sharedChatClient()
+	return proxyChatClient(c.Proxy)
 }
 
 // transport 返回底层 Transport（用于失败后清空闲连接池）。

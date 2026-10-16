@@ -441,30 +441,109 @@ func (s *Server) handleDSHExport(w http.ResponseWriter, r *http.Request) {
 
 // ---- system update ----
 
-// handleUpdateCheck GET /admin/system/update/check —— 诚实的"不支持自动更新"。
-//
-// ## 为什么不做真更新
-//
-// 本项目没有发布渠道（没有 release 仓库）、也没有签名产物。做一个"看起来能更新、
-// 实际没有源"的按钮比不做更糟：用户会点，然后拿到一个无法解释的失败，还会怀疑
-// 是网关坏了。如实返回 supported:false + 原因，前端把它渲染成禁用态 + 提示。
-//
-// 注意这里连 latest / has_update 都**不编**：没有渠道就没有"最新版本"这个概念，
-// 编一个版本号出来只会让前端显示一个假结论。
-//
-// ## 为什么公开（不挂 withAuth）
-//
-//   - 与紧邻的 GET /admin/system 同一类：公开只读元数据。版本号 /healthz 早就公开，
-//     "有没有发布渠道"更不是秘密。
-//   - 控制台在**还没有任何凭证**的时候就会调它（页面加载 2 秒后拉一次版本号，
-//     用于右上角的版本显示）。挂上鉴权的话，多用户部署下这次调用必然 401，
-//     而"检查更新"模态恰恰是用户拿来排查问题的入口 —— 让它先报"检查更新失败"
-//     正是本轮要修掉的那个症状。
-//   - 它不读任何密钥、用户数据或账号信息，只回三个常量。
+// ---- system update ----
+
+// handleUpdateCheck GET /admin/system/update/check —— 检查最新版本（公开只读）。
 func (s *Server) handleUpdateCheck(w http.ResponseWriter, r *http.Request) {
+	repo := "XCool-603/trae2api"
+	if s.cfg != nil && s.cfg.Update.Repo != "" {
+		repo = s.cfg.Update.Repo
+	}
+	if s.cfg != nil && !s.cfg.Update.Enabled {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"supported": false,
+			"reason":    "自动更新已在配置中禁用",
+			"current":   Version,
+		})
+		return
+	}
+
+	res, err := CheckUpdate(r.Context(), repo, Version)
+	if err != nil {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"supported":  true,
+			"current":    Version,
+			"has_update": false,
+			"reason":     "检查更新失败: " + err.Error(),
+		})
+		return
+	}
+	writeJSON(w, http.StatusOK, res)
+}
+
+// handleUpdateApply POST /admin/system/update/apply —— 下载最新版本并执行安全热替换。
+func (s *Server) handleUpdateApply(w http.ResponseWriter, r *http.Request) {
+	if !requireAdmin(w, r) {
+		return
+	}
+	repo := "XCool-603/trae2api"
+	if s.cfg != nil && s.cfg.Update.Repo != "" {
+		repo = s.cfg.Update.Repo
+	}
+
+	check, err := CheckUpdate(r.Context(), repo, Version)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{
+			"ok":    false,
+			"error": "检查更新失败: " + err.Error(),
+		})
+		return
+	}
+
+	if check.DownloadURL == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]any{
+			"ok":    false,
+			"error": "未找到适合当前平台的更新包下载链接: " + check.Reason,
+		})
+		return
+	}
+
+	s.logf("INFO: 开始自动更新，正在下载: %s (%s)", check.AssetName, check.DownloadURL)
+	bin, err := DownloadAndExtractAsset(r.Context(), check.DownloadURL)
+	if err != nil {
+		s.logf("ERROR: 下载/解压更新包失败: %v", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]any{
+			"ok":    false,
+			"error": "下载/解压更新包失败: " + err.Error(),
+		})
+		return
+	}
+
+	if err := ReplaceCurrentExecutable(bin); err != nil {
+		s.logf("ERROR: 替换可执行文件失败: %v", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]any{
+			"ok":    false,
+			"error": "替换可执行文件失败: " + err.Error(),
+		})
+		return
+	}
+
+	s.logf("INFO: 自动更新完成，版本已替换为 %s，准备自动重启...", check.Latest)
+
+	// 异步拉起新版本进程
+	go func() {
+		time.Sleep(1 * time.Second)
+		_ = RestartSelf()
+	}()
+
 	writeJSON(w, http.StatusOK, map[string]any{
-		"supported": false,
-		"reason":    "本项目未配置发布渠道（无 release 仓库），无法检查更新",
-		"current":   Version,
+		"ok":      true,
+		"version": check.Latest,
+		"message": fmt.Sprintf("已成功更新至 %s，网关正在自动重启...", check.Latest),
+	})
+}
+
+// handleSystemRestart POST /admin/system/restart —— 手动重启网关进程。
+func (s *Server) handleSystemRestart(w http.ResponseWriter, r *http.Request) {
+	if !requireAdmin(w, r) {
+		return
+	}
+	go func() {
+		time.Sleep(500 * time.Millisecond)
+		_ = RestartSelf()
+	}()
+	writeJSON(w, http.StatusOK, map[string]any{
+		"ok":      true,
+		"message": "正在重启网关...",
 	})
 }

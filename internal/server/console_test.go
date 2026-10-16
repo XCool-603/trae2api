@@ -200,6 +200,7 @@ var frozenContract = []routeProbe{
 	{"POST", "admin/accounts/probe-uid/enable", "既有"},
 	{"POST", "admin/accounts/probe-uid/disable", "既有"},
 	{"POST", "admin/accounts/probe-uid/test", "既有"},
+	{"POST", "admin/accounts/probe-uid/proxy", "既有"},
 	{"DELETE", "admin/accounts/probe-name", "既有"},
 	{"GET", "admin/accounts", "既有"},
 	{"POST", "admin/accounts/import", "既有"},
@@ -247,6 +248,7 @@ var frozenContract = []routeProbe{
 	{"POST", "admin/dsh/reset", "契约C"},
 	{"GET", "admin/dsh/export", "契约C"},
 	{"GET", "admin/system/update/check", "契约C"},
+	{"POST", "admin/system/update/apply", "契约D"},
 }
 
 // consoleDynamicOverrides 处理"动态段其实是枚举值"的调用点。
@@ -558,9 +560,10 @@ var consoleNoExec = map[string]string{
 	"POST /admin/dsh/stop":       "会操作真实子进程",
 	"POST /admin/dsh/install":    "会 exec 探测本机 node/desktop（契约也要求它绝不下载）",
 	"POST /admin/dsh/reset":      "会停进程并清理运行态",
-	"POST /admin/login/start":    "会开启 OAuth 登录会话（等回调 / 可能拉起浏览器）",
-	"POST /admin/login/callback": "会与上游通信换取凭据",
-	"POST /admin/password":       "会写 data/console.json（控制台密码）",
+	"POST /admin/login/start":          "会开启 OAuth 登录会话（等回调 / 可能拉起浏览器）",
+	"POST /admin/login/callback":       "会与上游通信换取凭据",
+	"POST /admin/password":             "会写 data/console.json（控制台密码）",
+	"POST /admin/system/update/apply": "会下载更新并替换执行文件及重启进程",
 }
 
 // consoleProbeServer 起一个真实的 HTTP 服务用于**实发请求**。

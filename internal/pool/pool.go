@@ -58,6 +58,8 @@ type Account struct {
 	Owner string
 	// Store 凭据存储句柄（协议层用它取 token / 续期）。
 	Store *traectl.Store
+	// Proxy 该账号专用的出站代理地址（http/https/socks5；空 = 走全局/系统代理）。
+	Proxy string
 
 	mu            sync.Mutex
 	disabled      bool
@@ -120,6 +122,9 @@ type Pool struct {
 	// seq 是单调递增的选号序号，给 Account.usedSeq 赋值，用于 LRU 兜底。
 	// 用原子操作，因为 Pick 可能在并发请求里同时跑。
 	seq atomic.Uint64
+
+	// slotCh 名额释放通知 channel，用于事件驱动唤醒排队等待的请求
+	slotCh chan struct{}
 
 	stateFile string
 }
@@ -200,6 +205,7 @@ func New(opt Options) *Pool {
 		degradeThreshold: opt.DegradeThreshold,
 		degradeCooldown:  opt.DegradeCooldown,
 		rnd:              rand.New(rand.NewSource(time.Now().UnixNano())),
+		slotCh:           make(chan struct{}, 1),
 		stateFile:        opt.StateFile,
 	}
 }
@@ -391,19 +397,31 @@ func (a *Account) weight(now time.Time, idlePerHour, idleMax float64) float64 {
 func (p *Pool) Pick(realm, model string, owners []string, tried map[string]bool) *Account {
 	now := time.Now()
 
-	// 防惊群：同一时刻只允许一次选号进入加权阶段
-	p.mu.Lock()
-	if p.pickGap > 0 && now.Sub(p.lastPick) < p.pickGap {
-		time.Sleep(p.pickGap - now.Sub(p.lastPick))
+	// 防惊群：若配置了 pickGap，在锁内计算需等待的时间，在锁外 sleep，绝不在持有排他锁时睡眠
+	if p.pickGap > 0 {
+		var wait time.Duration
+		p.mu.Lock()
+		if diff := now.Sub(p.lastPick); diff < p.pickGap {
+			wait = p.pickGap - diff
+			p.lastPick = now.Add(wait)
+		} else {
+			p.lastPick = now
+		}
+		p.mu.Unlock()
+		if wait > 0 {
+			time.Sleep(wait)
+			now = time.Now()
+		}
 	}
-	p.lastPick = time.Now()
+
+	p.mu.RLock()
 	cands := make([]*Account, 0, len(p.order))
 	for _, u := range p.order {
 		if a, ok := p.byUID[u]; ok {
 			cands = append(cands, a)
 		}
 	}
-	p.mu.Unlock()
+	p.mu.RUnlock()
 
 	type weighted struct {
 		a *Account
@@ -527,11 +545,22 @@ func (p *Pool) Release(uid string) {
 		return
 	}
 	a.mu.Lock()
-	defer a.mu.Unlock()
 	if a.inFlight > 0 {
 		a.inFlight--
 	}
 	a.lastUsed = time.Now()
+	a.mu.Unlock()
+
+	// 通知排队等待的协程立即尝试获取名额
+	select {
+	case p.slotCh <- struct{}{}:
+	default:
+	}
+}
+
+// SlotNotify 返回名额释放通知 channel（用于事件驱动唤醒排队等待的请求）。
+func (p *Pool) SlotNotify() <-chan struct{} {
+	return p.slotCh
 }
 
 // ---- 冷却 / 熔断 / 健康记账 ----
@@ -860,6 +889,27 @@ func (p *Pool) SetDisabled(uid string, disabled bool, reason string) bool {
 	return true
 }
 
+// SetProxy 动态设置账号绑定的代理地址。
+func (a *Account) SetProxy(proxyURL string) {
+	a.mu.Lock()
+	a.Proxy = strings.TrimSpace(proxyURL)
+	store := a.Store
+	a.mu.Unlock()
+	if store != nil {
+		store.SetProxy(proxyURL)
+	}
+}
+
+// SetProxy 设置指定账号的代理地址。
+func (p *Pool) SetProxy(uid, proxyURL string) bool {
+	a := p.Get(uid)
+	if a == nil {
+		return false
+	}
+	a.SetProxy(proxyURL)
+	return true
+}
+
 // HealthyIgnoringInflight 返回某域内"健康、但**不看**在途名额"的账号数。
 //
 // 用途：区分 Pick 返回 nil 的两种原因 ——
@@ -968,6 +1018,7 @@ type Status struct {
 	Credits           *int64           `json:"credits,omitempty"`
 	LastUsed          string           `json:"last_used,omitempty"`
 	TokenExpire       string           `json:"token_expire,omitempty"`
+	Proxy             string           `json:"proxy,omitempty"`
 }
 
 // Status 返回单账号状态。
@@ -977,6 +1028,7 @@ func (a *Account) Status(now time.Time) Status {
 	st := Status{
 		UID: a.UID, Realm: a.Realm, Label: a.Label, Owner: a.Owner,
 		Product: a.Product.Key, Disabled: a.disabled, DisableReason: a.disableReason,
+		Proxy: a.Proxy,
 		InFlight: a.inFlight, MaxInFlight: a.maxInFlight,
 		Fails: a.fails, OKCount: a.okCount, ErrCount: a.errCount,
 		UnclassifiedFails: a.consecutiveFails,
