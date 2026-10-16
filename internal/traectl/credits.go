@@ -118,11 +118,11 @@ func (u *EntUsage) SumExpiringCredits(within time.Duration, now time.Time) int64
 	return sum
 }
 
-// DefaultExpiringWindow 是"即将过期"的判定窗口。
+// DefaultExpiringWindow 是"即将过期"的判定窗口（30 天：覆盖月度权益包）。
 //
 // 取 7 天：太短（如 1 天）会让绝大多数账号都算出 0（因子失效）；
 // 太长（如 30 天）会让"快过期"失去区分度（几乎所有账号都命中）。
-const DefaultExpiringWindow = 7 * 24 * time.Hour
+const DefaultExpiringWindow = 30 * 24 * time.Hour
 
 // CheckinResult 是签到领取结果。
 type CheckinResult struct {
@@ -157,6 +157,13 @@ func (s *Store) postUGWithRetry(ctx context.Context, path string, out any, allow
 	s.mu.Unlock()
 
 	host := strings.TrimRight(cred.Host, "/")
+	// CN 的登录引导配置会把 UG host 给成 api.trae.com.cn，但 ug/checkin_credits
+	// 家族只部署在 api.trae.cn（.com.cn 上全系 404；pay/ent 家族两个 host 都在，
+	// 所以额度刷新一直正常、唯独签到坏——极难定位）。归一到已知可用的 .cn。
+	// httptest 等其他 host 一律不动。
+	if host == "https://api.trae.com.cn" {
+		host = DefaultUGHost
+	}
 	if host == "" {
 		host = DefaultUGHost
 	}

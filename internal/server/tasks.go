@@ -116,8 +116,17 @@ type CreditsSummary struct {
 	Consumed  float64 `json:"consumed"`
 	Ratio     float64 `json:"consumption_ratio"`
 	Packs     int     `json:"entitlement_packs"`
-	CheckedIn bool    `json:"checked_in_today"`
-	Error     string  `json:"error,omitempty"`
+	// PackDetails 权益包明细（面额与到期时间；end_time=0 表示永久）。
+	PackDetails []PackDetail `json:"pack_details,omitempty"`
+	CheckedIn   bool         `json:"checked_in_today"`
+	Error       string       `json:"error,omitempty"`
+}
+
+// PackDetail 单个权益包的展示明细。
+type PackDetail struct {
+	Desc      string  `json:"desc"`
+	Amount    float64 `json:"amount"`
+	ExpiresAt string  `json:"expires_at,omitempty"` // MM-DD [HH:mm]
 }
 
 // CreditsSnapshot 查询全部账号的额度明细（**只读、实时**，不缓存）。
@@ -142,6 +151,13 @@ func (s *Server) CreditsSnapshot(ctx context.Context) []CreditsSummary {
 			cs.Consumed = u.UsageSummary.ConsumedAmount
 			cs.Ratio = u.UsageSummary.ConsumptionRatio
 			cs.Packs = len(u.Packs)
+			for _, p := range u.Packs {
+				pd := PackDetail{Desc: p.DisplayDesc, Amount: p.BaseInfo.ChargeAmount}
+				if p.BaseInfo.EndTime > 0 {
+					pd.ExpiresAt = time.Unix(p.BaseInfo.EndTime, 0).Local().Format("01-02 15:04")
+				}
+				cs.PackDetails = append(cs.PackDetails, pd)
+			}
 			if st, serr := a.Store.CheckinStatus(cctx); serr == nil && st != nil {
 				cs.CheckedIn = st.CheckedIn
 			}
