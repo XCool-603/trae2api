@@ -91,7 +91,7 @@ func newPromptRewriter(cfg *config.Config) *prompt.Rewriter {
 // 二进制 `version` 却报 0.1.0。发布流程从没跑过，所以一直没人发现。
 //
 // 这个默认值是**本地 go build 出来的**二进制会报的版本（不含 tag 信息）。
-var Version = "0.2.2"
+var Version = "0.2.3"
 
 // ServiceName 网关身份标识（/healthz 透出，便于宿主识别"假成功"）。
 const ServiceName = "trae2api"

@@ -208,20 +208,48 @@ func (s *Store) isIntl() bool {
 	return s.Product.Edition == EditionIntl || IsIntlHost(s.Cred.Host)
 }
 
+// skipCheckin 判断当前 Store 是否应跳过签到。
+//
+// 跳过条件：
+//   - 国际版账号：签到体系仅限 CN 版（客户端 `if (providerCode !== Vn.CN) throw`）。
+//   - SOLO 产品：SOLO 使用独立 function（solo_work_lite），上游没有 checkin_credits
+//     端点（实测返回 404）。Trae CN 与 SOLO CN 共享同一账号与额度池，
+//     签到积分由 trae-cn 侧领取即可，SOLO 侧重复请求只会产生无谓的 404 告警。
+func (s *Store) skipCheckin() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.Product.Edition == EditionIntl || IsIntlHost(s.Cred.Host) {
+		return true
+	}
+	if s.Product.IsSOLO {
+		return true
+	}
+	return false
+}
+
 // CheckinStatus 查询签到状态。
-// 国际版体系不支持签到（客户端直接判断 `if (providerCode !== Vn.CN) throw Checkin unavailable`），
-// 国际版账号直接返回 Enable: false, CheckedIn: true，避免发请求产生 404 告警。
+// 国际版 / SOLO 不支持签到，直接返回 Enable: false, CheckedIn: true。
+// 上游返回 404 时也视为「该账号不支持签到」（优雅降级），不当作错误。
 func (s *Store) CheckinStatus(ctx context.Context) (*CheckinStatus, error) {
-	if s.isIntl() {
+	if s.skipCheckin() {
 		return &CheckinStatus{
 			Enable:    false,
 			CheckedIn: true,
 			Code:      0,
-			Message:   "国际版无签到体系",
+			Message:   "该产品无签到体系",
 		}, nil
 	}
 	var st CheckinStatus
 	if err := s.postUG(ctx, pathCheckinStatus, &st); err != nil {
+		// 上游 404 = 该账号/产品不支持 checkin_credits，视为「未开放」而非错误
+		if ue, ok := err.(*UGError); ok && ue.HTTPStatus == 404 {
+			return &CheckinStatus{
+				Enable:    false,
+				CheckedIn: true,
+				Code:      0,
+				Message:   "上游返回 404，签到接口不可用",
+			}, nil
+		}
 		return nil, err
 	}
 	if st.Code != 0 {
@@ -235,8 +263,8 @@ func (s *Store) CheckinStatus(ctx context.Context) (*CheckinStatus, error) {
 // 幂等性：上游对重复签到返回业务码非 0（而非 500），调用方应把"已签到"
 // 视为成功而不是错误 —— 否则定时任务会在已签到的日子里刷满告警。
 func (s *Store) CheckinClaim(ctx context.Context) (*CheckinResult, error) {
-	if s.isIntl() {
-		return &CheckinResult{Code: 0, Message: "国际版无签到体系"}, nil
+	if s.skipCheckin() {
+		return &CheckinResult{Code: 0, Message: "该产品无签到体系"}, nil
 	}
 	var r CheckinResult
 	if err := s.postUG(ctx, pathCheckinClaim, &r); err != nil {
