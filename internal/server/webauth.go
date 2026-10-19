@@ -9,6 +9,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"trae2api/internal/usermgr"
 )
 
 // 本文件实现**控制台 Web 密码闸**（config 里的 `web_password`）。
@@ -167,11 +169,20 @@ func (s *Server) consoleAuthed(r *http.Request) bool {
 	if s.webAuth == nil || !s.webAuth.Enabled() {
 		return true
 	}
-	c, err := r.Cookie(webAuthCookie)
-	if err != nil {
-		return false
+	if c, err := r.Cookie(webAuthCookie); err == nil && s.webAuth.ValidSession(c.Value) {
+		return true
 	}
-	return s.webAuth.ValidSession(c.Value)
+	// 如果用户体系启用了，且当前带有有效管理员的 sessionCookie，放行访问控制台
+	if s.users != nil {
+		if c, err := r.Cookie(sessionCookie); err == nil && c.Value != "" {
+			if id, ok := loginSessions.userID(c.Value); ok {
+				if u, ok := s.users.ByID(id); ok && !u.Disabled && u.Role == usermgr.RoleAdmin {
+					return true
+				}
+			}
+		}
+	}
+	return false
 }
 
 // trustProxyHeaders 安全地读取配置（cfg 为 nil 时按 false 处理）。
@@ -203,7 +214,20 @@ func (s *Server) handleConsoleLogin(w http.ResponseWriter, r *http.Request) {
 	}
 
 	pw := r.FormValue("password")
-	if !s.webAuth.Check(pw) {
+	authed := s.webAuth.Check(pw)
+	if !authed && s.users != nil {
+		// 容错：如果用户输入的是任意可用管理员的密码，也允许通过控制台门禁
+		for _, u := range s.users.List() {
+			if !u.Disabled && u.Role == usermgr.RoleAdmin && u.PasswordHash != "" {
+				if s.users.CheckPassword(u.ID, pw) {
+					authed = true
+					break
+				}
+			}
+		}
+	}
+
+	if !authed {
 		locked, lockFor := s.loginLimit.NoteFailure(ip, now)
 		if locked {
 			s.logf("WARN: 控制台登录连续失败达阈值，已锁定 IP %s（%s）", ip, lockFor)
@@ -241,39 +265,70 @@ func (s *Server) handleConsoleLogout(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/console", http.StatusFound)
 }
 
-// writeLoginHTML 渲染登录页。
+// writeLoginHTML 渲染控制台登录页（100% 对齐控制台与门户的赛博暗黑极客风格）。
 func writeLoginHTML(w http.ResponseWriter, status int, errMsg string) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(status)
 	msg := ""
 	if errMsg != "" {
-		msg = `<p class="err">` + htmlEscape(errMsg) + `</p>`
+		msg = `<div class="err err-box"><svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/></svg><span>` + htmlEscape(errMsg) + `</span></div>`
 	}
 	_, _ = w.Write([]byte(`<!doctype html><html lang="zh-CN"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Trae2Api 控制台登录</title><style>
-*{box-sizing:border-box}
-body{font:15px/1.6 system-ui,-apple-system,"Segoe UI",sans-serif;background:#0f1115;color:#e6e8ee;
-display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0;padding:20px}
-.box{width:100%;max-width:380px;padding:32px;background:#171a21;border:1px solid #2a2f3a;border-radius:12px}
-h1{font-size:18px;margin:0 0 6px}
-p.sub{color:#6b7280;font-size:13px;margin:0 0 20px}
-input{width:100%;padding:10px 12px;background:#0b0d12;color:#e6e8ee;border:1px solid #2a2f3a;
-border-radius:8px;font-size:15px;margin-bottom:14px}
-input:focus{outline:none;border-color:#4da3ff}
-button{width:100%;padding:10px;background:#2b6cb0;color:#fff;border:0;border-radius:8px;
-font-size:15px;cursor:pointer}
-button:hover{background:#3182ce}
-.err{color:#fc8181;font-size:13px;margin:0 0 12px}
+<title>Trae2Api 控制台登录 · 需要密码</title><style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;background-color:#030712;color:#f1f5f9;min-height:100vh;display:flex;align-items:center;justify-content:center;padding:20px;position:relative;overflow:hidden}
+.cyber-grid{position:fixed;inset:0;background-size:40px 40px;background-image:linear-gradient(to right,rgba(255,255,255,0.03) 1px,transparent 1px),linear-gradient(to bottom,rgba(255,255,255,0.03) 1px,transparent 1px);pointer-events:none;z-index:0}
+.orb{position:fixed;border-radius:9999px;filter:blur(100px);pointer-events:none;z-index:0}
+.orb-1{top:-10%;left:20%;width:450px;height:450px;background:radial-gradient(circle,rgba(99,102,241,0.22) 0%,transparent 70%)}
+.orb-2{bottom:-10%;right:20%;width:500px;height:500px;background:radial-gradient(circle,rgba(168,85,247,0.18) 0%,transparent 70%)}
+.login-card{position:relative;z-index:10;width:100%;max-width:390px;padding:38px 32px 30px;background:rgba(11,17,32,0.72);backdrop-filter:blur(20px);-webkit-backdrop-filter:blur(20px);border:1px solid rgba(255,255,255,0.09);border-radius:24px;box-shadow:0 25px 50px -12px rgba(0,0,0,0.65),0 0 35px -5px rgba(99,102,241,0.2);text-align:center}
+.icon-box{width:56px;height:56px;margin:0 auto 16px;border-radius:18px;background:linear-gradient(135deg,#6366f1 0%,#a855f7 50%,#ec4899 100%);display:flex;align-items:center;justify-content:center;box-shadow:0 10px 25px -4px rgba(99,102,241,0.45)}
+.icon-box svg{width:28px;height:28px;stroke:#fff}
+.brand-title{font-size:22px;font-weight:800;letter-spacing:-0.025em;color:#fff;display:flex;align-items:center;justify-content:center;gap:8px;margin-bottom:6px}
+.brand-title .accent{color:#818cf8}
+.pro-badge{font-size:10px;font-weight:700;letter-spacing:0.05em;padding:2px 7px;border-radius:9999px;background:linear-gradient(135deg,rgba(99,102,241,0.25),rgba(168,85,247,0.25));color:#c7d2fe;border:1px solid rgba(99,102,241,0.35)}
+.sub-title{color:#94a3b8;font-size:13px;margin-bottom:24px}
+.err-box{background:rgba(244,63,94,0.12);border:1px solid rgba(244,63,94,0.35);color:#fda4af;border-radius:12px;font-size:13px;padding:10px 14px;margin-bottom:18px;display:flex;align-items:center;gap:8px;text-align:left}
+.err-box svg{width:16px;height:16px;flex-shrink:0;stroke:#fb7185}
+.form-group{margin-bottom:16px}
+.input-pw{width:100%;padding:12px 16px;background:rgba(8,12,22,0.9);color:#f8fafc;border:1px solid rgba(51,65,85,0.8);border-radius:14px;font-size:14px;font-family:ui-monospace,"JetBrains Mono",Consolas,monospace;text-align:center;letter-spacing:2px;transition:all .2s ease}
+.input-pw::placeholder{color:#64748b;letter-spacing:normal;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;font-size:13px}
+.input-pw:focus{outline:none;border-color:#6366f1;box-shadow:0 0 0 3px rgba(99,102,241,0.25);background:rgba(11,17,32,0.95)}
+.btn-submit{width:100%;padding:12px;background:linear-gradient(135deg,#4f46e5 0%,#7c3aed 50%,#6366f1 100%);color:#fff;border:none;border-radius:14px;font-size:14px;font-weight:700;cursor:pointer;box-shadow:0 8px 24px -4px rgba(79,70,229,0.45);transition:all .2s ease}
+.btn-submit:hover{filter:brightness(1.1);transform:translateY(-1px);box-shadow:0 10px 28px -4px rgba(79,70,229,0.6)}
+.btn-submit:active{transform:translateY(0)}
+.footer-links{margin-top:22px;padding-top:16px;border-top:1px solid rgba(255,255,255,0.06);display:flex;align-items:center;justify-content:space-between;font-size:11px;color:#64748b}
+.footer-links a{color:#818cf8;text-decoration:none;transition:color .15s ease}
+.footer-links a:hover{color:#a5b4fc;text-decoration:underline}
 </style></head><body>
-<form class="box" method="POST" action="/login">
-  <h1>Trae2Api 控制台</h1>
-  <p class="sub">需要密码才能访问</p>
+<div class="cyber-grid"></div>
+<div class="orb orb-1"></div>
+<div class="orb orb-2"></div>
+<div class="login-card">
+  <div class="icon-box">
+    <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+      <path stroke-linecap="round" stroke-linejoin="round" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"/>
+    </svg>
+  </div>
+  <div class="brand-title">
+    Trae<span class="accent">2Api</span>
+    <span class="pro-badge">PRO</span>
+  </div>
+  <p class="sub-title">控制台安全门禁 · 需要密码</p>
   ` + msg + `
-  <input type="password" name="password" placeholder="控制台密码" autofocus autocomplete="current-password">
-  <button type="submit">登录</button>
-</form></body></html>`))
+  <form method="POST" action="/login">
+    <div class="form-group">
+      <input type="password" name="password" class="input-pw" placeholder="请输入控制台密码" autofocus autocomplete="current-password" required>
+    </div>
+    <button type="submit" class="btn-submit">登 录 进 入</button>
+  </form>
+  <div class="footer-links">
+    <a href="/">← 返回公开门户</a>
+    <span>Trae 订阅额度 → API</span>
+  </div>
+</div></body></html>`))
 }
 
 // htmlEscape 是给登录页用的最小转义（只用于把固定文案与错误提示放进 HTML）。
