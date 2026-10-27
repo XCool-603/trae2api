@@ -41,6 +41,12 @@ func (s *Server) CheckinAll(ctx context.Context) []CheckinOutcome {
 				out = append(out, oc)
 				continue
 			}
+			if a.Store != nil && a.Store.SkipCheckin() {
+				oc.Status = "unsupported"
+				oc.Detail = "该产品无签到体系（国际版/SOLO）"
+				out = append(out, oc)
+				continue
+			}
 			cctx, cancel := traectl.WithCreditsTimeout(ctx)
 			did, cs, err := a.Store.CheckinAndReport(cctx)
 			cancel()

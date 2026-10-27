@@ -315,6 +315,13 @@ func TestSnapshotNormalize(t *testing.T) {
 	if s.Label == "" {
 		t.Error("label 未补默认值")
 	}
+
+	// 存量账号使用了已下线的 api.trae.com.cn 时必须自动纠偏迁移至 api.trae.cn
+	sOldHost := &CredentialSnapshot{Product: "trae-cn", UserID: "u2", Host: "https://api.trae.com.cn"}
+	sOldHost.Normalize()
+	if sOldHost.Host != DefaultUGHost {
+		t.Errorf("api.trae.com.cn 未自动迁移至 %q: %q", DefaultUGHost, sOldHost.Host)
+	}
 }
 
 // TestSnapshotFromStorageJSON 从 storage.json 原文转快照（走解密路径）。

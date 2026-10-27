@@ -270,6 +270,16 @@ async function refreshData() {
 }
 
 function renderStatus(st) {
+  if (st.current_user) {
+    currentUser = { id: st.current_user.id, username: st.current_user.username, role: st.current_user.role };
+    if (st.current_user.api_key && !currentApiKey) {
+      currentApiKey = st.current_user.api_key;
+      try { localStorage.setItem('trae2api_key', currentApiKey); } catch (e) { }
+      if ($('inputApiKey')) $('inputApiKey').value = currentApiKey;
+      if ($('chatApiKey')) $('chatApiKey').value = currentApiKey;
+    }
+    applyCurrentUser();
+  }
   // 账号列表与统计同源：都在这里落到模块状态，renderStatus 可被单独调用
   // （冒烟测试就是这么用的 —— 依赖调用顺序的隐式状态最容易在改动中失效）。
   cachedAccounts = st.accounts || [];
@@ -614,8 +624,13 @@ async function runBatchSignin() {
         (r.already > 0 ? '，' + num(r.already) + ' 个今日已签' : '');
     } else if (r.already > 0 && !r.failed) {
       msg = '今日均已签到（共 ' + num(r.already) + ' 个账号今日已签过，Trae 每天限签 1 次，无需重复签到）';
+    } else if (r.unsupported > 0 && !r.failed) {
+      msg = '已处理：' + num(r.unsupported) + ' 个账号无签到体系已跳过（国际版/SOLO 上游无签到积分）';
     } else {
       msg = '签到完成：新签 ' + num(r.checked) + '，已签 ' + num(r.already);
+    }
+    if (r.unsupported > 0 && r.checked > 0) {
+      msg += '，跳过 ' + num(r.unsupported) + ' 个无签到账号';
     }
 
     if (r.failed > 0) {
@@ -669,6 +684,7 @@ async function resetDegrade() {
 
 // 快照列表：只需要 uid → 文件名 的映射（删除账号用）与目录提示
 async function loadSnapshots() {
+  if (currentUser && currentUser.role !== 'admin') return;
   try {
     var r = await api('admin/accounts');
     accountFileByUid = {};
@@ -681,7 +697,7 @@ async function loadSnapshots() {
     window.__snapshotDir = r.dir || '';
     window.__snapshotCount = list.length;
   } catch (e) {
-    if (e && e.status !== 401) toast('读取账号快照列表失败：' + errText(e), 'warn');
+    if (e && e.status !== 401 && e.status !== 403) toast('读取账号快照列表失败：' + errText(e), 'warn');
   }
 }
 
@@ -803,7 +819,8 @@ function updatePasswordBadge(hasPw) {
       badge.innerText = '未设密码（免密）';
     }
   }
-  if (hasPw) hide('unprotectedWarningBanner'); else show('unprotectedWarningBanner');
+  var isAdminUser = !currentUser || currentUser.role === 'admin';
+  if (hasPw || !isAdminUser) hide('unprotectedWarningBanner'); else show('unprotectedWarningBanner');
 }
 
 async function loadSystemInfo() {
@@ -1998,6 +2015,8 @@ async function doLogout() {
 function applyCurrentUser() {
   var badge = $('navUserBadge');
   var usersTab = $('mainTabBtn-users');
+  var authMenuBtn = $('btnHeaderAuthMenu') ? $('btnHeaderAuthMenu').parentElement : null;
+  var isAdminUser = !currentUser || currentUser.role === 'admin';
   if (currentUser) {
     if (badge) badge.classList.remove('hidden');
     setText('navUsernameText', currentUser.username);
@@ -2011,12 +2030,17 @@ function applyCurrentUser() {
         roleTag.className = 'text-[10px] px-1.5 py-0.2 rounded bg-emerald-500/20 text-emerald-300 border border-emerald-500/30';
       }
     }
-    // 普通用户没有管理面：隐藏用户管理标签
-    if (usersTab) { if (currentUser.role === 'admin') usersTab.classList.remove('hidden'); else usersTab.classList.add('hidden'); }
+    // 普通用户没有管理面：隐藏用户管理标签与快捷添加账号按钮
+    if (usersTab) { if (isAdminUser) usersTab.classList.remove('hidden'); else usersTab.classList.add('hidden'); }
+    if (authMenuBtn) { if (isAdminUser) authMenuBtn.classList.remove('hidden'); else authMenuBtn.classList.add('hidden'); }
+    if (!isAdminUser && currentActiveTab === 'users') {
+      switchMainTab('access');
+    }
   } else {
     if (badge) badge.classList.add('hidden');
     // 未登录（单机免密 / 仅 API Key）时按管理员对待：否则用户管理页永远打不开
     if (usersTab) usersTab.classList.remove('hidden');
+    if (authMenuBtn) authMenuBtn.classList.remove('hidden');
   }
 }
 

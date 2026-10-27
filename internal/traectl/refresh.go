@@ -228,7 +228,8 @@ func (s *Store) Refresh(ctx context.Context) error {
 		return fmt.Errorf("traectl: %s 缺少设备私钥（iCubeAuthInfo://icube-dc:*），无法生成设备证明", s.Product.Label)
 	}
 	host := strings.TrimRight(cred.Host, "/")
-	if host == "" {
+	// 若存量账号 host 仍指向已下线的 api.trae.com.cn，自动纠偏迁移至 api.trae.cn
+	if host == "" || strings.Contains(strings.ToLower(host), "api.trae.com.cn") {
 		host = DefaultUGHost
 	}
 

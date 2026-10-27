@@ -1,12 +1,18 @@
 package server
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"trae2api/internal/config"
+	"trae2api/internal/pool"
+	"trae2api/internal/usermgr"
 )
 
 // TestWebAuthDisabledWhenNoPassword 未配置密码时免密。
@@ -277,5 +283,96 @@ func TestHTMLEscape(t *testing.T) {
 	}
 	if !strings.Contains(got, "&lt;script&gt;") {
 		t.Errorf("应转义尖括号: %s", got)
+	}
+}
+
+// TestConsoleLoginRegularUser 普通用户也能通过控制台门禁登录并查看控制台与状态
+func TestConsoleLoginRegularUser(t *testing.T) {
+	um := usermgr.New(filepath.Join(t.TempDir(), "users.json"))
+	if _, err := um.CreateWithPassword("admin", usermgr.RoleAdmin, "admin-pw-123456", "首个管理员"); err != nil {
+		t.Fatalf("创建管理员失败: %v", err)
+	}
+	u, err := um.CreateWithPassword("bob", usermgr.RoleUser, "bob-pw-123456", "测试普通用户")
+	if err != nil {
+		t.Fatalf("创建用户失败: %v", err)
+	}
+
+	wa := newWebAuth("admin-secret-password")
+	p := pool.New(pool.Options{})
+	s := &Server{
+		cfg:        &config.Config{APIKey: "sk-global-admin"},
+		users:      um,
+		webAuth:    wa,
+		loginLimit: newLoginLimiter(),
+		pool:       p,
+	}
+
+	// 1. 未登录访问 /console 应被拦
+	req0 := httptest.NewRequest(http.MethodGet, "/console", nil)
+	w0 := httptest.NewRecorder()
+	s.handleConsole(w0, req0)
+	if w0.Code != http.StatusUnauthorized {
+		t.Fatalf("未登录应 401，实际 %d", w0.Code)
+	}
+
+	// 2. 普通用户以用户名+密码登录
+	form := url.Values{
+		"username": {"bob"},
+		"password": {"bob-pw-123456"},
+	}
+	req := httptest.NewRequest(http.MethodPost, "/login", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	w := httptest.NewRecorder()
+	s.handleConsoleLogin(w, req)
+
+	if w.Code != http.StatusFound {
+		t.Fatalf("应 302 跳转，实际 %d", w.Code)
+	}
+	var sessCookie *http.Cookie
+	for _, c := range w.Result().Cookies() {
+		if c.Name == sessionCookie {
+			sessCookie = c
+		}
+	}
+	if sessCookie == nil {
+		t.Fatal("未签发 sessionCookie")
+	}
+
+	// 3. 携带普通用户 Cookie 访问 /console 应放行
+	req2 := httptest.NewRequest(http.MethodGet, "/console", nil)
+	req2.AddCookie(sessCookie)
+	w2 := httptest.NewRecorder()
+	s.handleConsole(w2, req2)
+	if w2.Code != http.StatusOK {
+		t.Fatalf("普通用户登录后应 200 放行，实际 %d", w2.Code)
+	}
+
+	// 4. 访问 /status，应在 current_user 返回普通用户身份，且 isAdmin 为 false
+	req3 := httptest.NewRequest(http.MethodGet, "/status", nil)
+	req3.AddCookie(sessCookie)
+	w3 := httptest.NewRecorder()
+	s.withAuth(s.handleStatus).ServeHTTP(w3, req3)
+	if w3.Code != http.StatusOK {
+		t.Fatalf("/status 应 200，实际 %d", w3.Code)
+	}
+	var statusResp map[string]any
+	if err := json.Unmarshal(w3.Body.Bytes(), &statusResp); err != nil {
+		t.Fatalf("解析 status JSON 失败: %v", err)
+	}
+	cu, ok := statusResp["current_user"].(map[string]any)
+	if !ok {
+		t.Fatalf("statusResp 缺少 current_user: %v", statusResp)
+	}
+	if cu["username"] != "bob" || cu["role"] != "user" || cu["id"] != u.ID {
+		t.Errorf("current_user 不匹配: got %v", cu)
+	}
+
+	// 5. 普通用户尝试访问管理接口（如 /admin/checkin）应 403
+	reqAdmin := httptest.NewRequest(http.MethodPost, "/admin/checkin", nil)
+	reqAdmin.AddCookie(sessCookie)
+	wAdmin := httptest.NewRecorder()
+	s.withAuth(s.handleCheckin).ServeHTTP(wAdmin, reqAdmin)
+	if wAdmin.Code != http.StatusForbidden {
+		t.Errorf("普通用户访问管理端点应 403，实际 %d", wAdmin.Code)
 	}
 }

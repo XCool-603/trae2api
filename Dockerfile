@@ -18,7 +18,7 @@ COPY . .
 
 # CGO_ENABLED=0 → 纯静态二进制，可以跑在 alpine 上而不需要 glibc。
 # -trimpath 去掉本机绝对路径（可复现构建）；-s -w 去符号表（体积减半）。
-ARG APP_VERSION=0.2.1
+ARG APP_VERSION=0.2.5
 RUN CGO_ENABLED=0 GOOS=linux go build \
       -trimpath -ldflags "-s -w -X trae2api/internal/server.Version=${APP_VERSION}" \
       -o /out/trae2api ./cmd/trae2api

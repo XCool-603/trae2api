@@ -1028,7 +1028,7 @@ func (a *Account) Status(now time.Time) Status {
 	st := Status{
 		UID: a.UID, Realm: a.Realm, Label: a.Label, Owner: a.Owner,
 		Product: a.Product.Key, Disabled: a.disabled, DisableReason: a.disableReason,
-		Proxy: a.Proxy,
+		Proxy:    a.Proxy,
 		InFlight: a.inFlight, MaxInFlight: a.maxInFlight,
 		Fails: a.fails, OKCount: a.okCount, ErrCount: a.errCount,
 		UnclassifiedFails: a.consecutiveFails,

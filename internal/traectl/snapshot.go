@@ -119,7 +119,8 @@ func (c *CredentialSnapshot) Normalize() {
 	case "solo", "solo-cn", "solocn", "solo_cn", "traework", "trae-solo":
 		c.Product = "solo-cn"
 	}
-	if strings.TrimSpace(c.Host) == "" {
+	// 若存量账号 host 为空或仍指向已下线的 api.trae.com.cn，自动纠偏迁移至 api.trae.cn
+	if strings.TrimSpace(c.Host) == "" || strings.Contains(strings.ToLower(c.Host), "api.trae.com.cn") {
 		c.Host = DefaultUGHost
 	}
 	if c.Label == "" {

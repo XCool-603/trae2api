@@ -91,7 +91,7 @@ func newPromptRewriter(cfg *config.Config) *prompt.Rewriter {
 // 二进制 `version` 却报 0.1.0。发布流程从没跑过，所以一直没人发现。
 //
 // 这个默认值是**本地 go build 出来的**二进制会报的版本（不含 tag 信息）。
-var Version = "0.2.4"
+var Version = "0.2.5"
 
 // ServiceName 网关身份标识（/healthz 透出，便于宿主识别"假成功"）。
 const ServiceName = "trae2api"
@@ -473,10 +473,12 @@ func (s *Server) withAuth(next http.HandlerFunc) http.HandlerFunc {
 			return
 		}
 		// 1.6) 控制台密码闸门禁 Cookie（已通过 web_password 鉴权的管理端会话）
-		if s.webAuth != nil && s.webAuth.Enabled() && s.consoleAuthed(r) {
-			root := &usermgr.User{ID: "root", Username: "root", Role: usermgr.RoleAdmin}
-			next(w, r.WithContext(context.WithValue(r.Context(), userCtxKey, root)))
-			return
+		if s.webAuth != nil && s.webAuth.Enabled() {
+			if c, err := r.Cookie(webAuthCookie); err == nil && s.webAuth.ValidSession(c.Value) {
+				root := &usermgr.User{ID: "root", Username: "root", Role: usermgr.RoleAdmin}
+				next(w, r.WithContext(context.WithValue(r.Context(), userCtxKey, root)))
+				return
+			}
 		}
 
 		// 2) 全局 Key（管理员）
@@ -654,6 +656,14 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		"rbac_enabled":    userCount > 0,
 		"checkin_enabled": s.cfg.Schedule.CheckinEnabled,
 		"checkin_hours":   s.cfg.Schedule.CheckinHours,
+	}
+	if u := userFrom(r); u != nil && u.ID != "anonymous" {
+		resp["current_user"] = map[string]any{
+			"id":       u.ID,
+			"username": u.Username,
+			"role":     u.Role,
+			"api_key":  u.APIKey,
+		}
 	}
 	// WAF IP 级闸状态（未激活时也给出统计，便于判断"离触发有多近"）
 	if s.wafIP != nil {

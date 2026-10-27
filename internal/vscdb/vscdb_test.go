@@ -62,8 +62,8 @@ var realCases = []realCase{
 		// Trae 客户端在 10-12 更新了模型目录（新增 Doubao-Seed-Evolving 等），
 		// 导致该 value 变大。**不是读取器的缺陷** —— 同一时刻用 node:sqlite 现读
 		// 得到的就是下面这组值，两者逐字节一致。
-		bytes:  149520,
-		sha256: "96f0ed099297194ebd7189567f6f0c41e4375e4e3ef76a3fdbcb0610b4ad30f4",
+		bytes:  159403,
+		sha256: "34fc7d6dfa0977891575de1a95cff018fc19b7459829b6daea593bd53673d1a8",
 	},
 	{
 		// Trae CN 里另一个账号的模型目录，用来覆盖「同一文件多条 model_list_map」的情形

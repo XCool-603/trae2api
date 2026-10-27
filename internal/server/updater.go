@@ -51,6 +51,17 @@ type ghRelease struct {
 
 // CheckUpdate 从 GitHub Releases 检查最新可用版本。
 func CheckUpdate(ctx context.Context, repo, currentVer string) (*UpdateCheckResponse, error) {
+	// Docker 容器环境天然不支持在容器内部热替换二进制文件（容器只读层且非 root 运行），
+	// 应引导用户在宿主机重建容器。
+	if isDockerContainer() {
+		return &UpdateCheckResponse{
+			Supported: false,
+			Current:   currentVer,
+			HasUpdate: false,
+			Reason:    "当前服务运行在 Docker 容器内，不支持在容器内直接热更新。请在宿主机执行 `git pull && docker compose up -d --build` 或重新拉取最新镜像。",
+		}, nil
+	}
+
 	repo = strings.TrimSpace(repo)
 	if repo == "" {
 		repo = "XCool-603/trae2api"
@@ -205,30 +216,59 @@ func splitVersion(v string) []int {
 }
 
 // DownloadAndExtractAsset 下载并解压出新的可执行文件字节。
+// 若直接从原始链接下载失败（例如国内网络访问 GitHub Releases 超时），
+// 会自动尝试使用常见加速镜像源（或 GH_PROXY 环境变量指定的代理）。
 func DownloadAndExtractAsset(ctx context.Context, downloadURL string) ([]byte, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, downloadURL, nil)
+	urlsToTry := []string{downloadURL}
+
+	if ghProxy := strings.TrimRight(os.Getenv("GH_PROXY"), "/"); ghProxy != "" {
+		urlsToTry = append([]string{ghProxy + "/" + downloadURL}, urlsToTry...)
+	} else if strings.Contains(downloadURL, "github.com") {
+		mirrors := []string{
+			"https://ghfast.top/",
+			"https://ghproxy.net/",
+			"https://mirror.ghproxy.com/",
+		}
+		for _, m := range mirrors {
+			urlsToTry = append(urlsToTry, m+downloadURL)
+		}
+	}
+
+	var lastErr error
+	for _, u := range urlsToTry {
+		data, err := downloadSingleAsset(ctx, u)
+		if err == nil {
+			return ExtractExecutable(data)
+		}
+		lastErr = err
+	}
+
+	return nil, fmt.Errorf("下载更新包失败 (尝试了 %d 个源): %w", len(urlsToTry), lastErr)
+}
+
+func downloadSingleAsset(ctx context.Context, u string) ([]byte, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 	if err != nil {
 		return nil, fmt.Errorf("构造下载请求失败: %w", err)
 	}
 	req.Header.Set("User-Agent", "trae2api-updater/"+Version)
 
-	client := &http.Client{Timeout: 5 * time.Minute}
+	client := &http.Client{Timeout: 2 * time.Minute}
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("下载更新包失败: %w", err)
+		return nil, err
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("下载更新包返回 HTTP %d", resp.StatusCode)
+		return nil, fmt.Errorf("HTTP %d", resp.StatusCode)
 	}
 
 	data, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return nil, fmt.Errorf("读取更新包数据失败: %w", err)
 	}
-
-	return ExtractExecutable(data)
+	return data, nil
 }
 
 // ExtractExecutable 从原始数据中提取可执行文件内容（兼容 zip、tar.gz 或纯二进制）。
@@ -289,8 +329,26 @@ func ExtractExecutable(data []byte) ([]byte, error) {
 	return data, nil
 }
 
+// isDockerContainer 探测当前进程是否运行在 Docker 容器内部。
+func isDockerContainer() bool {
+	if testing.Testing() {
+		return false
+	}
+	if _, err := os.Stat("/.dockerenv"); err == nil {
+		return true
+	}
+	data, err := os.ReadFile("/proc/1/cgroup")
+	if err == nil && (strings.Contains(string(data), "docker") || strings.Contains(string(data), "containerd")) {
+		return true
+	}
+	return false
+}
+
 // ReplaceCurrentExecutable 将当前运行的可执行文件热替换为新版本内容。
 func ReplaceCurrentExecutable(newBinary []byte) error {
+	if isDockerContainer() {
+		return fmt.Errorf("当前运行在 Docker 容器中，容器层不支持直接热替换。请在宿主机执行 `git pull && docker compose up -d --build` 更新镜像")
+	}
 	if testing.Testing() {
 		return nil
 	}

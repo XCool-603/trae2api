@@ -556,13 +556,13 @@ func jsPartLiterals(p string) (lits []string, dynamic bool) {
 //
 // key 是真实路由表返回的注册模式（形如 "POST /admin/dsh/start"）。
 var consoleNoExec = map[string]string{
-	"POST /admin/dsh/start":      "会拉起 node 子进程",
-	"POST /admin/dsh/stop":       "会操作真实子进程",
-	"POST /admin/dsh/install":    "会 exec 探测本机 node/desktop（契约也要求它绝不下载）",
-	"POST /admin/dsh/reset":      "会停进程并清理运行态",
-	"POST /admin/login/start":          "会开启 OAuth 登录会话（等回调 / 可能拉起浏览器）",
-	"POST /admin/login/callback":       "会与上游通信换取凭据",
-	"POST /admin/password":             "会写 data/console.json（控制台密码）",
+	"POST /admin/dsh/start":           "会拉起 node 子进程",
+	"POST /admin/dsh/stop":            "会操作真实子进程",
+	"POST /admin/dsh/install":         "会 exec 探测本机 node/desktop（契约也要求它绝不下载）",
+	"POST /admin/dsh/reset":           "会停进程并清理运行态",
+	"POST /admin/login/start":         "会开启 OAuth 登录会话（等回调 / 可能拉起浏览器）",
+	"POST /admin/login/callback":      "会与上游通信换取凭据",
+	"POST /admin/password":            "会写 data/console.json（控制台密码）",
 	"POST /admin/system/update/apply": "会下载更新并替换执行文件及重启进程",
 }
 

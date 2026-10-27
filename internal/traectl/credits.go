@@ -3,6 +3,8 @@ package traectl
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -143,7 +145,38 @@ func (e *UGError) Error() string {
 	return fmt.Sprintf("traectl: %s HTTP %d code=%d: %s", e.Path, e.HTTPStatus, e.Code, e.Message)
 }
 
-// postUG 向成长/商业类端点发一次 POST（body 固定为 {}）。
+func isNumericDeviceID(s string) bool {
+	if len(s) < 10 {
+		return false
+	}
+	for _, c := range s {
+		if c < '0' || c > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+func randomNumericDeviceID() string {
+	var n uint64
+	if err := binary.Read(rand.Reader, binary.BigEndian, &n); err != nil {
+		n = uint64(time.Now().UnixNano())
+	}
+	return fmt.Sprintf("%016d", n%10000000000000000)
+}
+
+func ugRequestBody(path string) []byte {
+	switch path {
+	case pathCheckinStatus, pathCheckinClaim:
+		return []byte(`{"req_source":1}`)
+	case pathEntUsage:
+		return []byte(`{"require_usage":true,"req_source":0}`)
+	default:
+		return []byte(`{}`)
+	}
+}
+
+// postUG 向成长/商业类端点发一次 POST。
 //
 // 鉴权头与 chat 不同：这里只需 Cloud-IDE-JWT + 数字设备 ID（见文件头注释）。
 func (s *Store) postUG(ctx context.Context, path string, out any) error {
@@ -159,22 +192,26 @@ func (s *Store) postUGWithRetry(ctx context.Context, path string, out any, allow
 	host := strings.TrimRight(cred.Host, "/")
 	// CN 的登录引导配置会把 UG host 给成 api.trae.com.cn，但 ug/checkin_credits
 	// 家族只部署在 api.trae.cn（.com.cn 上全系 404；pay/ent 家族两个 host 都在，
-	// 所以额度刷新一直正常、唯独签到坏——极难定位）。归一到已知可用的 .cn。
-	// httptest 等其他 host 一律不动。
-	if host == "https://api.trae.com.cn" {
+	// 所以额度刷新一直正常、唯独签到坏——极难定位）。若存量账号 host 仍指向已下线的
+	// api.trae.com.cn，自动纠偏归一到 DefaultUGHost（api.trae.cn）。
+	if host == "" || strings.Contains(strings.ToLower(host), "api.trae.com.cn") {
 		host = DefaultUGHost
 	}
-	if host == "" {
-		host = DefaultUGHost
+
+	devID := deviceID
+	if !isNumericDeviceID(devID) {
+		devID = randomNumericDeviceID()
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, host+path, bytes.NewReader([]byte("{}")))
+
+	bodyBytes := ugRequestBody(path)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, host+path, bytes.NewReader(bodyBytes))
 	if err != nil {
 		return fmt.Errorf("traectl: 构造 %s 请求: %w", path, err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Cloud-IDE-JWT "+cred.Token)
 	// 注意：UG 接口的 x-device-id 是**数字设备 ID**，不是 chat 用的 sha256 派生值。
-	req.Header.Set("x-device-id", deviceID)
+	req.Header.Set("x-device-id", devID)
 	// 与 chat 保持一致的 UA：上游按 UA 做机器人识别，Go 默认 UA 会被拦。
 	req.Header.Set("User-Agent", defaultUserAgent)
 
@@ -215,6 +252,11 @@ func (s *Store) isIntl() bool {
 	return s.Product.Edition == EditionIntl || IsIntlHost(s.Cred.Host)
 }
 
+// SkipCheckin 报告当前 Store 是否应跳过签到（国际版与 SOLO 无签到体系）。
+func (s *Store) SkipCheckin() bool {
+	return s.skipCheckin()
+}
+
 // skipCheckin 判断当前 Store 是否应跳过签到。
 //
 // 跳过条件：
@@ -235,13 +277,13 @@ func (s *Store) skipCheckin() bool {
 }
 
 // CheckinStatus 查询签到状态。
-// 国际版 / SOLO 不支持签到，直接返回 Enable: false, CheckedIn: true。
+// 国际版 / SOLO 不支持签到，返回 Enable: false, CheckedIn: false。
 // 上游返回 404 时也视为「该账号不支持签到」（优雅降级），不当作错误。
 func (s *Store) CheckinStatus(ctx context.Context) (*CheckinStatus, error) {
 	if s.skipCheckin() {
 		return &CheckinStatus{
 			Enable:    false,
-			CheckedIn: true,
+			CheckedIn: false,
 			Code:      0,
 			Message:   "该产品无签到体系",
 		}, nil
@@ -252,7 +294,7 @@ func (s *Store) CheckinStatus(ctx context.Context) (*CheckinStatus, error) {
 		if ue, ok := err.(*UGError); ok && ue.HTTPStatus == 404 {
 			return &CheckinStatus{
 				Enable:    false,
-				CheckedIn: true,
+				CheckedIn: false,
 				Code:      0,
 				Message:   "上游返回 404，签到接口不可用",
 			}, nil
@@ -267,8 +309,9 @@ func (s *Store) CheckinStatus(ctx context.Context) (*CheckinStatus, error) {
 
 // CheckinClaim 执行签到。
 //
-// 幂等性：上游对重复签到返回业务码非 0（而非 500），调用方应把"已签到"
-// 视为成功而不是错误 —— 否则定时任务会在已签到的日子里刷满告警。
+// 幂等性与频控保护：
+//   - 若遇到 9074（当前使用人数太多），因 9074 为设备号级频控，自动轮换全新 16 位数字设备号重试一次。
+//   - 上游业务码非 0 必须向外报告错误，绝不静默当作成功。
 func (s *Store) CheckinClaim(ctx context.Context) (*CheckinResult, error) {
 	if s.skipCheckin() {
 		return &CheckinResult{Code: 0, Message: "该产品无签到体系"}, nil
@@ -276,6 +319,19 @@ func (s *Store) CheckinClaim(ctx context.Context) (*CheckinResult, error) {
 	var r CheckinResult
 	if err := s.postUG(ctx, pathCheckinClaim, &r); err != nil {
 		return nil, err
+	}
+	// 如果遇到 9074（当前使用人数太多，属于设备级频控），换全新 16 位数字设备号重试一次
+	if r.Code == 9074 {
+		newDev := randomNumericDeviceID()
+		s.mu.Lock()
+		s.DeviceID = newDev
+		s.mu.Unlock()
+		if err := s.postUG(ctx, pathCheckinClaim, &r); err != nil {
+			return nil, err
+		}
+	}
+	if r.Code != 0 {
+		return &r, &UGError{HTTPStatus: 200, Code: r.Code, Message: r.Message, Path: pathCheckinClaim}
 	}
 	return &r, nil
 }
@@ -334,6 +390,14 @@ func (s *Store) PayStatus(ctx context.Context) (map[string]any, error) {
 // 返回 (didCheckin, status, err)：didCheckin 表示本次是否真的执行了领取。
 // 已签到时不报错 —— 这是定时任务每天都会走到的正常路径。
 func (s *Store) CheckinAndReport(ctx context.Context) (bool, *CheckinStatus, error) {
+	if s.skipCheckin() {
+		return false, &CheckinStatus{
+			Enable:    false,
+			CheckedIn: false,
+			Code:      0,
+			Message:   "该产品无签到体系",
+		}, nil
+	}
 	if s.NeedsRefresh(10 * time.Minute) {
 		_ = s.Refresh(ctx)
 	}
@@ -352,8 +416,20 @@ func (s *Store) CheckinAndReport(ctx context.Context) (bool, *CheckinStatus, err
 	}
 	after, err := s.CheckinStatus(ctx)
 	if err != nil {
-		// 领取已成功，只是复核失败：仍算签到成功，但把状态回落到 before
+		// 领取已成功，复核失败：因 claim 已经成功返回 code=0，返回 true
 		return true, before, nil
+	}
+	if !after.CheckedIn {
+		msg := after.Message
+		if msg == "" {
+			msg = "上游领取接口响应正常但复查未标记已签到（积分未变动）"
+		}
+		return false, after, &UGError{
+			HTTPStatus: 200,
+			Code:       after.Code,
+			Message:    msg,
+			Path:       pathCheckinClaim,
+		}
 	}
 	return true, after, nil
 }

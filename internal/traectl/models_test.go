@@ -34,7 +34,7 @@ func TestIsCustomModel(t *testing.T) {
 // Trae CN chat_v3 18 条 → 过滤 2 条自建 → 16；
 // TRAE SOLO CN solo_work_lite 17 条 → 过滤 2 条自建 → 15。
 func TestLoadCatalogReal(t *testing.T) {
-	wantCount := map[string]int{"trae-cn": 20, "solo-cn": 15}
+	wantCount := map[string]int{"trae-cn": 21, "solo-cn": 15}
 	tested := 0
 	for _, p := range Products {
 		dbPath, err := DefaultStateDBPath(p)

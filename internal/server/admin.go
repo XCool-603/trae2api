@@ -44,7 +44,7 @@ func (s *Server) handleCheckin(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := contextWithTimeout(r, 120*time.Second)
 	defer cancel()
 	results := s.CheckinAll(ctx)
-	checked, already, failed, disabled := 0, 0, 0, 0
+	checked, already, failed, disabled, unsupported := 0, 0, 0, 0, 0
 	for _, it := range results {
 		switch it.Status {
 		case "checked":
@@ -55,14 +55,17 @@ func (s *Server) handleCheckin(w http.ResponseWriter, r *http.Request) {
 			failed++
 		case "disabled":
 			disabled++
+		case "unsupported", "skip":
+			unsupported++
 		}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"results":  results,
-		"checked":  checked,
-		"already":  already,
-		"failed":   failed,
-		"disabled": disabled,
+		"results":     results,
+		"checked":     checked,
+		"already":     already,
+		"failed":      failed,
+		"disabled":    disabled,
+		"unsupported": unsupported,
 	})
 }
 
@@ -302,4 +305,3 @@ func (s *Server) handleAccountProxy(w http.ResponseWriter, r *http.Request) {
 		"message": "账号代理已更新",
 	})
 }
-

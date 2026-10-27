@@ -172,11 +172,11 @@ func (s *Server) consoleAuthed(r *http.Request) bool {
 	if c, err := r.Cookie(webAuthCookie); err == nil && s.webAuth.ValidSession(c.Value) {
 		return true
 	}
-	// 如果用户体系启用了，且当前带有有效管理员的 sessionCookie，放行访问控制台
+	// 如果用户体系启用了，任何有效且未禁用的登录用户（含普通用户与管理员），放行访问控制台 UI
 	if s.users != nil {
 		if c, err := r.Cookie(sessionCookie); err == nil && c.Value != "" {
 			if id, ok := loginSessions.userID(c.Value); ok {
-				if u, ok := s.users.ByID(id); ok && !u.Disabled && u.Role == usermgr.RoleAdmin {
+				if u, ok := s.users.ByID(id); ok && !u.Disabled {
 					return true
 				}
 			}
@@ -213,15 +213,33 @@ func (s *Server) handleConsoleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	uname := strings.TrimSpace(r.FormValue("username"))
 	pw := r.FormValue("password")
-	authed := s.webAuth.Check(pw)
-	if !authed && s.users != nil {
-		// 容错：如果用户输入的是任意可用管理员的密码，也允许通过控制台门禁
-		for _, u := range s.users.List() {
-			if !u.Disabled && u.Role == usermgr.RoleAdmin && u.PasswordHash != "" {
-				if s.users.CheckPassword(u.ID, pw) {
-					authed = true
-					break
+
+	var authenticatedUser *usermgr.User
+	authed := false
+
+	if uname != "" && s.users != nil {
+		// 指定用户名登录（支持管理员和普通用户）
+		if u, ok := s.users.ByUsername(uname); ok && !u.Disabled {
+			if s.users.CheckPassword(u.ID, pw) {
+				authed = true
+				authenticatedUser = u
+			}
+		}
+	} else {
+		// 未指定用户名时：优先匹配全局 web_password
+		if s.webAuth.Check(pw) {
+			authed = true
+		} else if s.users != nil {
+			// 容错：如果用户输入的是可用用户的密码（优先管理员）
+			for _, u := range s.users.List() {
+				if !u.Disabled && u.PasswordHash != "" {
+					if s.users.CheckPassword(u.ID, pw) {
+						authed = true
+						authenticatedUser, _ = s.users.ByID(u.ID)
+						break
+					}
 				}
 			}
 		}
@@ -237,19 +255,40 @@ func (s *Server) handleConsoleLogin(w http.ResponseWriter, r *http.Request) {
 		}
 		s.logf("WARN: 控制台登录失败（密码错误）来自 %s", ip)
 		// 不区分"密码错误"与"密码为空"，避免给攻击者额外信息
-		writeLoginHTML(w, http.StatusUnauthorized, "密码不正确")
+		writeLoginHTML(w, http.StatusUnauthorized, "用户名或密码不正确")
 		return
 	}
 	s.loginLimit.NoteSuccess(ip)
-	token := s.webAuth.NewSession()
-	http.SetCookie(w, &http.Cookie{
-		Name:     webAuthCookie,
-		Value:    token,
-		Path:     "/",
-		HttpOnly: true, // 禁止 JS 读取，降低 XSS 窃取风险
-		SameSite: http.SameSiteLaxMode,
-		MaxAge:   int(webSessionTTL.Seconds()),
-	})
+
+	if authenticatedUser != nil {
+		token, err := loginSessions.new(authenticatedUser.ID)
+		if err == nil {
+			setSessionCookie(w, token)
+		}
+		// 如果是管理员，同时签发 webAuthCookie 保证对传统管理员路由的兼容
+		if authenticatedUser.Role == usermgr.RoleAdmin || !s.webAuth.Enabled() {
+			adminToken := s.webAuth.NewSession()
+			http.SetCookie(w, &http.Cookie{
+				Name:     webAuthCookie,
+				Value:    adminToken,
+				Path:     "/",
+				HttpOnly: true,
+				SameSite: http.SameSiteLaxMode,
+				MaxAge:   int(webSessionTTL.Seconds()),
+			})
+		}
+	} else {
+		token := s.webAuth.NewSession()
+		http.SetCookie(w, &http.Cookie{
+			Name:     webAuthCookie,
+			Value:    token,
+			Path:     "/",
+			HttpOnly: true, // 禁止 JS 读取，降低 XSS 窃取风险
+			SameSite: http.SameSiteLaxMode,
+			MaxAge:   int(webSessionTTL.Seconds()),
+		})
+	}
+
 	s.logf("INFO: 控制台登录成功，来自 %s", r.RemoteAddr)
 	http.Redirect(w, r, "/console", http.StatusFound)
 }
@@ -259,9 +298,13 @@ func (s *Server) handleConsoleLogout(w http.ResponseWriter, r *http.Request) {
 	if c, err := r.Cookie(webAuthCookie); err == nil {
 		s.webAuth.DropSession(c.Value)
 	}
+	if c, err := r.Cookie(sessionCookie); err == nil {
+		loginSessions.drop(c.Value)
+	}
 	http.SetCookie(w, &http.Cookie{
 		Name: webAuthCookie, Value: "", Path: "/", MaxAge: -1, HttpOnly: true,
 	})
+	clearSessionCookie(w)
 	http.Redirect(w, r, "/console", http.StatusFound)
 }
 
@@ -319,8 +362,11 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica N
   <p class="sub-title">控制台安全门禁 · 需要密码</p>
   ` + msg + `
   <form method="POST" action="/login">
+    <div class="form-group" style="margin-bottom:12px">
+      <input type="text" name="username" class="input-pw" style="text-align:left;letter-spacing:normal" placeholder="用户名（选填，仅管理员可不填）" autocomplete="username">
+    </div>
     <div class="form-group">
-      <input type="password" name="password" class="input-pw" placeholder="请输入控制台密码" autofocus autocomplete="current-password" required>
+      <input type="password" name="password" class="input-pw" style="text-align:left;letter-spacing:normal" placeholder="请输入控制台密码" autofocus autocomplete="current-password" required>
     </div>
     <button type="submit" class="btn-submit">登 录 进 入</button>
   </form>

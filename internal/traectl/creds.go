@@ -423,6 +423,10 @@ func (s *Store) loadSnapshotLocked(st map[string]json.RawMessage) error {
 		return fmt.Errorf("traectl: %s 既不是 storage.json（缺 %s）也不是快照（缺 token）",
 			s.path, keyAuth)
 	}
+	host := snap.Host
+	if strings.Contains(strings.ToLower(host), "api.trae.com.cn") {
+		host = DefaultUGHost
+	}
 	s.Cred = Credentials{
 		Token:            snap.Token,
 		RefreshToken:     snap.RefreshToken,
@@ -430,7 +434,7 @@ func (s *Store) loadSnapshotLocked(st map[string]json.RawMessage) error {
 		RefreshExpiredAt: snap.RefreshExpiredAt,
 		TokenReleaseAt:   snap.TokenReleaseAt,
 		UserID:           snap.UserID,
-		Host:             snap.Host,
+		Host:             host,
 	}
 	s.Device = DeviceKeyPair{PrivateKeyPEM: snap.PrivateKeyPEM, PublicKeyPEM: snap.PublicKeyPEM}
 	s.DeviceID = snap.DeviceID

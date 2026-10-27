@@ -379,3 +379,86 @@ func TestUGJSONShapeStable(t *testing.T) {
 		t.Log("确认：checkedIn 不会匹配 checked_in（下划线是契约的一部分）")
 	}
 }
+
+// TestCheckinAndReportFakeSuccessRejected 复查发现未真正入账时必须判定失败（防伪幂等 code:0 假成功）。
+func TestCheckinAndReportFakeSuccessRejected(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case pathCheckinStatus:
+			// 领取前后均返回未签到
+			_, _ = w.Write([]byte(`{"checked_in":false,"enable":true,"credits":100,"code":0}`))
+		case pathCheckinClaim:
+			_, _ = w.Write([]byte(`{"code":0,"message":"success"}`))
+		default:
+			t.Errorf("意外路径 %s", r.URL.Path)
+		}
+	}))
+	defer srv.Close()
+
+	did, _, err := testUGStore(srv.URL).CheckinAndReport(context.Background())
+	if err == nil {
+		t.Fatal("复查未入账时应报告错误，不能谎报成功")
+	}
+	if did {
+		t.Error("未入账时不应返回 did=true")
+	}
+	if !strings.Contains(err.Error(), "未标记已签到") {
+		t.Errorf("错误描述应说明未确认变动: %v", err)
+	}
+}
+
+// TestCheckinClaimErrorCodeRejected claim 接口返回非 0 业务码应报错。
+func TestCheckinClaimErrorCodeRejected(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Path == pathCheckinClaim {
+			_, _ = w.Write([]byte(`{"code":9004,"message":"参数错误"}`))
+		} else {
+			_, _ = w.Write([]byte(`{"checked_in":false,"enable":true,"credits":100,"code":0}`))
+		}
+	}))
+	defer srv.Close()
+
+	res, err := testUGStore(srv.URL).CheckinClaim(context.Background())
+	if err == nil {
+		t.Fatal("非 0 业务码必须返回错误")
+	}
+	var ue *UGError
+	if !asUG(err, &ue) || ue.Code != 9004 {
+		t.Fatalf("错误未正确转换为 UGError 或 code 不符: %v (res=%v)", err, res)
+	}
+}
+
+// TestCheckinSkipIntlAndSolo 国际版与 SOLO 账号无签到体系。
+func TestCheckinSkipIntlAndSolo(t *testing.T) {
+	intlStore := &Store{
+		Product: Product{Key: "trae-intl", Edition: EditionIntl},
+		Cred:    Credentials{Token: "test", Host: "https://api-sg.trae.ai"},
+	}
+	if !intlStore.SkipCheckin() {
+		t.Error("国际版应当 SkipCheckin")
+	}
+	st, err := intlStore.CheckinStatus(context.Background())
+	if err != nil {
+		t.Fatalf("CheckinStatus: %v", err)
+	}
+	if st.CheckedIn || st.Enable {
+		t.Errorf("国际版 CheckinStatus 不应为 checked_in 或 enable: %+v", st)
+	}
+
+	soloStore := &Store{
+		Product: Product{Key: "solo-cn", Edition: EditionCN, IsSOLO: true},
+		Cred:    Credentials{Token: "test", Host: DefaultUGHost},
+	}
+	if !soloStore.SkipCheckin() {
+		t.Error("SOLO 应当 SkipCheckin")
+	}
+	st2, err := soloStore.CheckinStatus(context.Background())
+	if err != nil {
+		t.Fatalf("SOLO CheckinStatus: %v", err)
+	}
+	if st2.CheckedIn || st2.Enable {
+		t.Errorf("SOLO CheckinStatus 不应为 checked_in 或 enable: %+v", st2)
+	}
+}
