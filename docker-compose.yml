@@ -15,15 +15,16 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-      # 需要与宿主 UID 对齐时才传（绑定挂载场景）。
-      # ⚠️ 不要传 1000：alpine 里没有 1000 号用户，但很多基础镜像已占用它；
-      #    本项目默认用 10001，绑定挂载到宿主时通常也不需要改（见 README）。
-      # args:
-      #   APP_UID: "10001"
-      #   APP_GID: "10001"
+      args:
+        APP_VERSION: "${APP_VERSION:-0.2.5}"
+        # 需要与宿主 UID 对齐时才传（绑定挂载场景）。
+        # ⚠️ 不要传 1000：alpine 里没有 1000 号用户，但很多基础镜像已占用它；
+        #    本项目默认用 10001，绑定挂载到宿主时通常也不需要改（见 README）。
+        # APP_UID: "10001"
+        # APP_GID: "10001"
 
-    # 不设 container_name：让 Compose 自动加项目名前缀，
-    # 避免同机多份 compose 部署时撞名（见 docker skill 8.1）。
+    # 默认使用本地构建镜像；也可使用 GHCR 预构建镜像（免去服务器编译消耗）：
+    # image: ghcr.io/xcool-603/trae2api:latest
     image: trae2api:local
 
     # 对外端口可覆盖：APP_PORT=18080 docker compose up -d
