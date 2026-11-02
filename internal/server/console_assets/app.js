@@ -2427,7 +2427,11 @@ async function checkAppUpdate(isManual) {
   }
   try {
     var d = await api('admin/system/update/check');
-    hide('updateAvailableDot');
+    if (d.has_update) {
+      show('updateAvailableDot');
+    } else {
+      hide('updateAvailableDot');
+    }
     if (!isManual) {
       if (d.current) setText('appVersionText', d.current);
       return;
@@ -2439,12 +2443,23 @@ async function checkAppUpdate(isManual) {
     var notes = $('updateNotesBox');
     var dockerTip = $('updateDockerTip');
     var btnDo = $('btnDoUpdate');
-    if (d.supported) {
+    if (d.is_docker) {
       if (badge) {
-        badge.className = 'text-xs font-semibold px-3 py-1 rounded-full bg-indigo-500/20 text-indigo-400 border border-indigo-500/30';
+        badge.className = 'text-xs font-semibold px-3 py-1 rounded-full ' + (d.has_update ? 'bg-indigo-500/20 text-indigo-400 border border-indigo-500/30' : 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30');
+        badge.innerText = d.has_update ? '发现新版本 (Docker)' : '当前已是最新';
+      }
+      if (notes && d.release_notes) { notes.innerText = '更新说明：\n' + d.release_notes; notes.classList.remove('hidden'); }
+      else if (notes) { notes.classList.add('hidden'); }
+      if (dockerTip) dockerTip.classList.remove('hidden');
+      if (btnDo) btnDo.classList.add('hidden');
+    } else if (d.supported) {
+      if (badge) {
+        badge.className = 'text-xs font-semibold px-3 py-1 rounded-full ' + (d.has_update ? 'bg-indigo-500/20 text-indigo-400 border border-indigo-500/30' : 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30');
         badge.innerText = d.has_update ? '发现新版本' : '当前已是最新';
       }
       if (notes && d.release_notes) { notes.innerText = '更新说明：\n' + d.release_notes; notes.classList.remove('hidden'); }
+      else if (notes) { notes.classList.add('hidden'); }
+      if (dockerTip) dockerTip.classList.add('hidden');
       if (btnDo) { if (d.has_update) btnDo.classList.remove('hidden'); else btnDo.classList.add('hidden'); }
     } else {
       // 本项目没有发布渠道：如实显示"不支持"，并隐藏一键升级按钮

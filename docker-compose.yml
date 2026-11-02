@@ -59,10 +59,32 @@ services:
 
     restart: unless-stopped
 
+    # 为 Watchtower 隔离标记（自动更新时只更新 Trae2Api，不干扰宿主机上其他容器）：
+    labels:
+      - "com.centurylinklabs.watchtower.scope=trae2api"
+
     # 容器内 127.0.0.1 指容器自己。若将来需要访问宿主上的服务，
     # 用 host.docker.internal 并保留下面这行（Linux 上需要它才能解析）：
     extra_hosts:
       - "host.docker.internal:host-gateway"
+
+  # ── 全自动无人值守更新服务（Watchtower）──
+  # 监控 GHCR 镜像仓库，当 Trae2Api 发布新版本时自动拉取并平滑重启容器，实现零运维自动升级。
+  # 启动命令（启用自动更新）：
+  #   docker compose --profile auto-update up -d
+  # （注意：Watchtower 自动更新需配合 GHCR 镜像使用，即 image: ghcr.io/xcool-603/trae2api:latest）
+  watchtower:
+    image: containrrr/watchtower:latest
+    container_name: trae2api-watchtower
+    restart: unless-stopped
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    command: --interval 3600 --cleanup --scope trae2api
+    environment:
+      - WATCHTOWER_CLEANUP=true
+      - WATCHTOWER_SCOPE=trae2api
+    profiles:
+      - auto-update
 
 volumes:
   trae2api-data: {}

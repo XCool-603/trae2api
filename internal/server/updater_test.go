@@ -194,3 +194,48 @@ func TestUpdateApplyRequireAdmin(t *testing.T) {
 		t.Errorf("GET /admin/system/update/check 应为 200，实际为 %d", w2.Code)
 	}
 }
+
+// TestCheckUpdateInDocker 测试在 Docker 容器环境下检查更新的行为。
+// 即使在 Docker 中，也应正常获取最新版本、更新日志并标记 IsDocker。
+func TestCheckUpdateInDocker(t *testing.T) {
+	mockRel := ghRelease{
+		TagName:     "v0.9.0",
+		Name:        "Trae2Api v0.9.0",
+		Body:        "## 更新说明\n- Docker 支持 Watchtower 自动更新",
+		HTMLURL:     "https://github.com/XCool-603/trae2api/releases/tag/v0.9.0",
+		PublishedAt: "2026-10-15T12:00:00Z",
+	}
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(mockRel)
+	}))
+	defer ts.Close()
+
+	t.Setenv("TRAE2API_UPDATE_URL", ts.URL)
+	t.Setenv("TEST_IS_DOCKER", "1")
+
+	res, err := CheckUpdate(context.Background(), "test/repo", "0.1.0")
+	if err != nil {
+		t.Fatalf("CheckUpdate 出错: %v", err)
+	}
+
+	if !res.IsDocker {
+		t.Error("res.IsDocker 应为 true")
+	}
+	if res.Supported {
+		t.Error("Docker 环境下 res.Supported 应为 false（引导走镜像更新而非二进制热替）")
+	}
+	if !res.HasUpdate {
+		t.Error("Docker 环境下 res.HasUpdate 应为 true（最新版 0.9.0 > 当前 0.1.0）")
+	}
+	if res.Latest != "0.9.0" {
+		t.Errorf("res.Latest = %q, want 0.9.0", res.Latest)
+	}
+	if res.ReleaseNotes != mockRel.Body {
+		t.Errorf("res.ReleaseNotes = %q, want %q", res.ReleaseNotes, mockRel.Body)
+	}
+	if res.Reason == "" {
+		t.Error("Docker 环境下 res.Reason 应提供更新指引说明")
+	}
+}

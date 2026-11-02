@@ -23,6 +23,7 @@ import (
 // UpdateCheckResponse 是 GET /admin/system/update/check 的标准响应结构。
 type UpdateCheckResponse struct {
 	Supported    bool   `json:"supported"`
+	IsDocker     bool   `json:"is_docker"`
 	Current      string `json:"current"`
 	Latest       string `json:"latest,omitempty"`
 	HasUpdate    bool   `json:"has_update"`
@@ -51,16 +52,7 @@ type ghRelease struct {
 
 // CheckUpdate 从 GitHub Releases 检查最新可用版本。
 func CheckUpdate(ctx context.Context, repo, currentVer string) (*UpdateCheckResponse, error) {
-	// Docker 容器环境天然不支持在容器内部热替换二进制文件（容器只读层且非 root 运行），
-	// 应引导用户在宿主机重建容器。
-	if isDockerContainer() {
-		return &UpdateCheckResponse{
-			Supported: false,
-			Current:   currentVer,
-			HasUpdate: false,
-			Reason:    "当前服务运行在 Docker 容器内，不支持在容器内直接热更新。请在宿主机执行 `git pull && docker compose up -d --build` 或重新拉取最新镜像。",
-		}, nil
-	}
+	isDocker := isDockerContainer()
 
 	repo = strings.TrimSpace(repo)
 	if repo == "" {
@@ -83,7 +75,8 @@ func CheckUpdate(ctx context.Context, repo, currentVer string) (*UpdateCheckResp
 	resp, err := client.Do(req)
 	if err != nil {
 		return &UpdateCheckResponse{
-			Supported: true,
+			Supported: !isDocker,
+			IsDocker:  isDocker,
 			Current:   currentVer,
 			HasUpdate: false,
 			Reason:    fmt.Sprintf("连接发布服务器失败: %v", err),
@@ -93,7 +86,8 @@ func CheckUpdate(ctx context.Context, repo, currentVer string) (*UpdateCheckResp
 
 	if resp.StatusCode == http.StatusNotFound {
 		return &UpdateCheckResponse{
-			Supported: true,
+			Supported: !isDocker,
+			IsDocker:  isDocker,
 			Current:   currentVer,
 			Latest:    currentVer,
 			HasUpdate: false,
@@ -104,7 +98,8 @@ func CheckUpdate(ctx context.Context, repo, currentVer string) (*UpdateCheckResp
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
 		return &UpdateCheckResponse{
-			Supported: true,
+			Supported: !isDocker,
+			IsDocker:  isDocker,
 			Current:   currentVer,
 			HasUpdate: false,
 			Reason:    fmt.Sprintf("检查更新失败 (HTTP %d): %s", resp.StatusCode, strings.TrimSpace(string(body))),
@@ -119,11 +114,9 @@ func CheckUpdate(ctx context.Context, repo, currentVer string) (*UpdateCheckResp
 	latestVer := strings.TrimPrefix(strings.TrimSpace(rel.TagName), "v")
 	hasUpdate := isNewerVersion(latestVer, currentVer)
 
-	var matchedAsset *ghReleaseAsset
-	matchedAsset = findMatchingAsset(rel.Assets, runtime.GOOS, runtime.GOARCH)
-
 	res := &UpdateCheckResponse{
-		Supported:    true,
+		Supported:    !isDocker,
+		IsDocker:     isDocker,
 		Current:      currentVer,
 		Latest:       latestVer,
 		HasUpdate:    hasUpdate,
@@ -131,6 +124,16 @@ func CheckUpdate(ctx context.Context, repo, currentVer string) (*UpdateCheckResp
 		HTMLURL:      rel.HTMLURL,
 		PublishedAt:  rel.PublishedAt,
 	}
+
+	if isDocker {
+		if hasUpdate {
+			res.Reason = "当前服务运行在 Docker 容器内。可启用 Watchtower 实现全自动后台静默更新，或在宿主机执行 `docker compose pull && docker compose up -d` 快速升级。"
+		}
+		return res, nil
+	}
+
+	var matchedAsset *ghReleaseAsset
+	matchedAsset = findMatchingAsset(rel.Assets, runtime.GOOS, runtime.GOARCH)
 
 	if matchedAsset != nil {
 		res.DownloadURL = matchedAsset.BrowserDownloadURL
@@ -332,7 +335,7 @@ func ExtractExecutable(data []byte) ([]byte, error) {
 // isDockerContainer 探测当前进程是否运行在 Docker 容器内部。
 func isDockerContainer() bool {
 	if testing.Testing() {
-		return false
+		return os.Getenv("TEST_IS_DOCKER") == "1"
 	}
 	if _, err := os.Stat("/.dockerenv"); err == nil {
 		return true

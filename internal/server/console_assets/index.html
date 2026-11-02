@@ -1339,10 +1339,27 @@ eyJhbGciOi...----refresh_token_here'></textarea>
 
         <div id="updateNotesBox" class="p-3.5 bg-slate-950/80 rounded-xl border border-slate-800 text-xs text-slate-300 max-h-48 overflow-y-auto custom-scroll whitespace-pre-wrap font-mono leading-relaxed hidden"></div>
 
-        <div id="updateDockerTip" class="p-3 bg-amber-500/10 border border-amber-500/20 rounded-xl text-amber-300 text-xs leading-relaxed hidden">
-          🐳 <b>检测到当前为 Docker 容器部署：</b><br>
-          在宿主机执行以下命令即可平滑更新，数据自动保留：<br>
-          <code class="block mt-1 p-2 bg-slate-900 rounded font-mono text-[11px] text-amber-200 select-all">git pull origin main && docker compose up -d --build --force-recreate</code>
+        <div id="updateDockerTip" class="p-3.5 bg-indigo-950/40 border border-indigo-500/30 rounded-xl text-xs space-y-2.5 hidden">
+          <div class="flex items-center justify-between text-indigo-300 font-semibold">
+            <span class="flex items-center gap-1.5"><span>🐳</span><span>Docker 容器更新方案</span></span>
+            <span class="text-[10px] px-2 py-0.5 rounded-full bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 font-normal">容器化推荐</span>
+          </div>
+          <div class="text-slate-300 text-[11px] leading-relaxed">
+            <p class="font-medium text-slate-200">方案 A（全自动无人值守更新 · 推荐）：</p>
+            <p class="text-slate-400 mt-0.5">在宿主机执行以下命令启动 Watchtower，后续发布新版将全自动后台平滑静默热更：</p>
+            <div class="mt-1 flex items-center gap-2">
+              <code class="flex-1 p-2 bg-slate-900 border border-slate-800 rounded font-mono text-[11px] text-indigo-300 select-all" id="dockerAutoCmd">docker compose --profile auto-update up -d</code>
+              <button onclick="copyText('dockerAutoCmd')" class="px-2.5 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded text-[11px] font-medium border border-slate-700 transition shrink-0">复制</button>
+            </div>
+          </div>
+          <div class="text-slate-300 text-[11px] leading-relaxed pt-1.5 border-t border-slate-800/80">
+            <p class="font-medium text-slate-200">方案 B（手动一条命令更新）：</p>
+            <div class="mt-1 flex items-center gap-2">
+              <code class="flex-1 p-2 bg-slate-900 border border-slate-800 rounded font-mono text-[11px] text-amber-200 select-all" id="dockerManualCmd">docker compose pull && docker compose up -d</code>
+              <button onclick="copyText('dockerManualCmd')" class="px-2.5 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded text-[11px] font-medium border border-slate-700 transition shrink-0">复制</button>
+            </div>
+            <p class="text-[10px] text-slate-400 mt-1">（源码构建用户可执行：<span class="font-mono text-slate-300">git pull && docker compose up -d --build</span>）</p>
+          </div>
         </div>
 
         <div id="updateErrorMsg" class="text-xs text-rose-400 font-mono hidden"></div>
