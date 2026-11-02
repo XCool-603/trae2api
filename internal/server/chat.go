@@ -246,9 +246,24 @@ func toTraeRequest(req *chatRequest, bareModel string) traectl.ChatRequest {
 	}
 }
 
-// usageToMap 把上游 usage 映射为 OpenAI 结构（含 cached / reasoning 明细）。
-func usageToMap(u *traectl.Usage) map[string]any {
-	return map[string]any{
+// modelCreditCost 计算指定模型单次调用消耗的积分（依据真实 consumption_rate 或 fee_model_level）。
+func (s *Server) modelCreditCost(ch *Channel, bareModel string) float64 {
+	if ch != nil && ch.Catalog != nil {
+		if m, ok := ch.Catalog.ByID(bareModel); ok {
+			if m.ConsumptionRate > 0 {
+				return m.ConsumptionRate
+			}
+			if m.FeeModelLevel > 0 {
+				return float64(m.FeeModelLevel)
+			}
+		}
+	}
+	return 1.0
+}
+
+// usageToMap 把上游 usage 映射为 OpenAI 结构（含 cached / reasoning 明细与单次积分消耗）。
+func usageToMap(u *traectl.Usage, cost float64) map[string]any {
+	m := map[string]any{
 		"prompt_tokens":     u.PromptTokens,
 		"completion_tokens": u.CompletionTokens,
 		"total_tokens":      u.TotalTokens,
@@ -259,6 +274,11 @@ func usageToMap(u *traectl.Usage) map[string]any {
 			"reasoning_tokens": u.ReasoningTokens,
 		},
 	}
+	if cost > 0 {
+		m["credits"] = cost
+		m["credit_cost"] = cost
+	}
+	return m
 }
 
 // ---- 处理入口 ----
@@ -444,6 +464,7 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	owners := s.ownerOf(r)
 	st := newChatStat(time.Now(), req.Model, stream)
 	st.setRealm(realmKey)
+	st.setCredits(s.modelCreditCost(ch, bareModel))
 	st.collector = s.metrics
 	defer st.done()
 
@@ -675,7 +696,7 @@ func (s *Server) runChat(w http.ResponseWriter, r *http.Request, ch *Channel, ac
 		if err != nil {
 			return err
 		}
-		writeCompletion(w, bareModel, agg)
+		writeCompletion(w, bareModel, agg, st.credits)
 		st.recordUsage(agg.Usage)
 		if u := userFrom(r); u != nil && s.users != nil && agg.Usage != nil {
 			s.users.DeductQuota(u.ID, int64(agg.Usage.TotalTokens))
@@ -722,6 +743,9 @@ func (s *Server) streamChat(w http.ResponseWriter, ctx context.Context, cl *trae
 		w.Header().Set("Cache-Control", "no-cache")
 		w.Header().Set("Connection", "keep-alive")
 		w.Header().Set("X-Accel-Buffering", "no")
+		if st != nil && st.credits > 0 {
+			w.Header().Set("X-Credit-Cost", fmt.Sprintf("%.2f", st.credits))
+		}
 		w.WriteHeader(http.StatusOK)
 	}
 
@@ -878,10 +902,14 @@ func (s *Server) streamChat(w http.ResponseWriter, ctx context.Context, cl *trae
 
 	writeChunk(map[string]any{}, st.finishReason())
 	if includeUsage && usage != nil {
+		cost := 0.0
+		if st != nil {
+			cost = st.credits
+		}
 		obj := map[string]any{
 			"id": id, "object": "chat.completion.chunk", "created": created, "model": bareModel,
 			"choices": []any{},
-			"usage":   usageToMap(usage),
+			"usage":   usageToMap(usage, cost),
 		}
 		b, _ := json.Marshal(obj)
 		fmt.Fprintf(w, "data: %s\n\n", b)
@@ -895,7 +923,7 @@ func (s *Server) streamChat(w http.ResponseWriter, ctx context.Context, cl *trae
 }
 
 // writeCompletion 非流式响应。
-func writeCompletion(w http.ResponseWriter, model string, agg *traectl.Aggregated) {
+func writeCompletion(w http.ResponseWriter, model string, agg *traectl.Aggregated, cost float64) {
 	msg := map[string]any{"role": "assistant", "content": agg.Content}
 	if agg.Reasoning != "" {
 		msg["reasoning_content"] = agg.Reasoning
@@ -924,7 +952,10 @@ func writeCompletion(w http.ResponseWriter, model string, agg *traectl.Aggregate
 		}},
 	}
 	if agg.Usage != nil {
-		resp["usage"] = usageToMap(agg.Usage)
+		resp["usage"] = usageToMap(agg.Usage, cost)
+	}
+	if cost > 0 {
+		w.Header().Set("X-Credit-Cost", fmt.Sprintf("%.2f", cost))
 	}
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	_ = json.NewEncoder(w).Encode(resp)

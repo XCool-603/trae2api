@@ -957,6 +957,11 @@ function renderTokenAnalytics(stats) {
   var totalTok = num(scopeView.total_tokens) || (promptTok + compTok);
   var reqs = num(scopeView.requests);
   var succ = num(scopeView.success);
+  var totalCredits = (scopeView.credit_sum !== undefined && scopeView.credit_sum !== null) ? Number(scopeView.credit_sum).toFixed(2) : '0.00';
+
+  setText('labelTotalCredits', titlePrefix + ' 消耗积分');
+  setText('badgeCreditsScope', scopeLabel);
+  setText('statTotalCredits', totalCredits);
 
   setText('labelTotalTokens', titlePrefix + ' 消耗 Token');
   setText('badgeDateScope', scopeLabel);
@@ -983,11 +988,11 @@ function renderTokenAnalytics(stats) {
   });
   var rows = '';
   if (isDay) {
-    rows += '<tr><td colspan="9" class="py-2 px-3 text-[11px] text-amber-300/80 font-sans">' +
-      '注意：本网关按天只聚合总量，分模型维度是全量累计（下表为全量数据）。' + escapeHtml(titlePrefix) + ' 的总量见上方四张卡片。</td></tr>';
+    rows += '<tr><td colspan="10" class="py-2 px-3 text-[11px] text-amber-300/80 font-sans">' +
+      '注意：本网关按天只聚合总量，分模型维度是全量累计（下表为全量数据）。' + escapeHtml(titlePrefix) + ' 的总量见上方五张卡片。</td></tr>';
   }
   if (!models.length) {
-    rows += '<tr><td colspan="9" class="py-6 text-center text-slate-500 font-sans">还没有请求调用数据，调用后自动记录</td></tr>';
+    rows += '<tr><td colspan="10" class="py-6 text-center text-slate-500 font-sans">还没有请求调用数据，调用后自动记录</td></tr>';
   } else {
     for (var k = 0; k < models.length; k++) {
       var id = models[k];
@@ -996,9 +1001,11 @@ function renderTokenAnalytics(stats) {
       var tt = num(v.total_tokens) || (p + c);
       var lat = num(v.avg_latency_ms);
       var tps = (lat > 0 && c > 0) ? (c / (lat / 1000)) : 0;
+      var cred = (v.credit_sum !== undefined && v.credit_sum !== null) ? Number(v.credit_sum).toFixed(2) : '0.00';
       rows += '<tr class="hover:bg-slate-800/40 transition">' +
         '<td class="py-2.5 px-3 font-semibold text-slate-200"><span class="text-indigo-300">' + escapeHtml(id) + '</span></td>' +
         '<td class="py-2.5 px-3 font-mono text-slate-400">' + escapeHtml(multiplierOf(id)) + '</td>' +
+        '<td class="py-2.5 px-3 text-amber-400 font-mono font-bold">' + cred + '</td>' +
         '<td class="py-2.5 px-3 text-slate-300 font-mono">' + fmtInt(v.requests) + '</td>' +
         '<td class="py-2.5 px-3 text-emerald-400 font-mono font-bold">' + fmtInt(tt) + '</td>' +
         '<td class="py-2.5 px-3 text-indigo-300 font-mono">' + fmtInt(p) + '</td>' +
@@ -1014,18 +1021,20 @@ function renderTokenAnalytics(stats) {
   // 4) 按日历史
   var dHtml = '';
   if (!days.length) {
-    dHtml = '<tr><td colspan="8" class="py-6 text-center text-slate-500 font-sans">暂无每日统计历史数据</td></tr>';
+    dHtml = '<tr><td colspan="9" class="py-6 text-center text-slate-500 font-sans">暂无每日统计历史数据</td></tr>';
   } else {
     for (var q = 0; q < days.length; q++) {
       var dd = days[q], dv = dd.view || {};
       var dreq = num(dv.requests), dsuc = num(dv.success);
       var dp = num(dv.prompt_tokens), dc = num(dv.completion_tokens);
+      var dcred = (dv.credit_sum !== undefined && dv.credit_sum !== null) ? Number(dv.credit_sum).toFixed(2) : '0.00';
       var isToday = dd.day === today;
       var hl = (selectedMetricsDate === dd.day || (isToday && selectedMetricsDate === 'today')) ? ' bg-indigo-950/20' : '';
       dHtml += '<tr class="hover:bg-slate-800/40 transition' + hl + '">' +
         '<td class="py-2.5 px-3 font-semibold font-mono text-slate-200"><span>' + escapeHtml(dd.day) + '</span>' +
         (isToday ? '<span class="ml-1.5 text-[10px] px-1.5 py-0.5 rounded bg-emerald-500/20 text-emerald-400 font-normal">今日</span>' : '') + '</td>' +
-        '<td class="py-2.5 px-3 text-amber-400 font-mono font-medium">' + fmtInt(dreq) + '</td>' +
+        '<td class="py-2.5 px-3 text-amber-400 font-mono font-bold">' + dcred + ' 积分</td>' +
+        '<td class="py-2.5 px-3 text-slate-300 font-mono font-medium">' + fmtInt(dreq) + '</td>' +
         '<td class="py-2.5 px-3 text-slate-400 font-mono">' + (dreq > 0 ? ((dsuc / dreq) * 100).toFixed(1) + '%' : '100.0%') + '</td>' +
         '<td class="py-2.5 px-3 text-emerald-400 font-mono font-bold">' + fmtInt(num(dv.total_tokens) || (dp + dc)) + '</td>' +
         '<td class="py-2.5 px-3 text-indigo-300 font-mono">' + fmtInt(dp) + '</td>' +
@@ -1045,16 +1054,44 @@ function multiplierOf(modelID) {
   }
   return '—';
 }
-// 参考实现的「实时请求流水」在我们这里没有对应端点（网关不暴露逐请求日志）。
-// 用 /v1/stats 的 by_account 聚合派生一张**如实标注**的按账号表，而不是留空。
+// 渲染「实时网关请求流水」：优先展示逐次请求流水（含单次积分扣减）；无单次记录时回退到按账号聚合。
 function renderAccountAggregates(stats) {
+  var tbody = $('requestLogsTable');
+  if (!tbody) return;
+
+  var recent = stats.recent_requests || [];
+  if (recent.length > 0) {
+    setText('logCountBadge', recent.length + ' 条最近调用');
+    var rhtml = '';
+    for (var j = 0; j < recent.length; j++) {
+      var it = recent[j];
+      var costStr = (it.credit_cost !== undefined && it.credit_cost !== null) ? (Number(it.credit_cost).toFixed(2) + ' 积分') : '—';
+      var tok = (it.prompt_tokens || it.completion_tokens) ? (it.prompt_tokens + '+' + it.completion_tokens) : '—';
+      var statusBadge = it.success
+        ? '<span class="px-1.5 py-0.5 rounded text-[10px] bg-emerald-500/20 text-emerald-400 font-sans border border-emerald-500/30">成功</span>'
+        : '<span class="px-1.5 py-0.5 rounded text-[10px] bg-rose-500/20 text-rose-400 font-sans border border-rose-500/30">失败</span>';
+      var modeBadge = it.streaming ? '<span class="text-[9px] text-cyan-400 ml-1 font-mono">stream</span>' : '';
+      rhtml += '<tr class="hover:bg-slate-800/40 transition">' +
+        '<td class="py-2.5 px-2 text-slate-500 font-mono">#' + (j + 1) + '</td>' +
+        '<td class="py-2.5 px-2 text-slate-400 font-mono">' + escapeHtml(it.time || '—') + '</td>' +
+        '<td class="py-2.5 px-2 font-medium text-slate-200"><span class="text-indigo-300">' + escapeHtml(it.model) + '</span>' + modeBadge + '</td>' +
+        '<td class="py-2.5 px-2 text-slate-400 truncate max-w-[140px]" title="' + escapeHtml(it.account) + '">' + escapeHtml(it.account || '—') + '</td>' +
+        '<td class="py-2.5 px-2 text-amber-400 font-mono font-bold">' + costStr + '</td>' +
+        '<td class="py-2.5 px-2 text-slate-300 font-mono">' + tok + '</td>' +
+        '<td class="py-2.5 px-2 text-slate-400 font-mono">' + (it.ttfb_ms > 0 ? (it.ttfb_ms + 'ms') : '—') + '</td>' +
+        '<td class="py-2.5 px-2 text-slate-300 font-mono">' + (it.latency_ms > 0 ? (it.latency_ms + 'ms') : '—') + '</td>' +
+        '<td class="py-2.5 px-2 text-right">' + statusBadge + '</td>' +
+        '</tr>';
+    }
+    tbody.innerHTML = rhtml;
+    return;
+  }
+
   var by = stats.by_account || {};
   var keys = Object.keys(by);
   setText('logCountBadge', keys.length + ' 个账号');
-  var tbody = $('requestLogsTable');
-  if (!tbody) return;
   if (!keys.length) {
-    tbody.innerHTML = '<tr><td colspan="9" class="py-8 text-center text-slate-500 font-sans">还没有账号级调用记录（调用网关接口后在此按账号聚合呈现）</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="9" class="py-8 text-center text-slate-500 font-sans">暂无单次请求流水（调用网关接口后在此逐条呈现单次消耗积分与延迟）</td></tr>';
     return;
   }
   keys.sort(function (a, b) { return num(by[b].requests) - num(by[a].requests); });
@@ -1064,16 +1101,17 @@ function renderAccountAggregates(stats) {
     var c = num(v.completion_tokens), lat = num(v.avg_latency_ms);
     var tps = (lat > 0 && c > 0) ? (c / (lat / 1000)).toFixed(1) + ' tok/s' : '<span class="text-slate-500">—</span>';
     var failed = num(v.failed);
+    var acctCost = (v.credit_sum !== undefined && v.credit_sum !== null) ? (Number(v.credit_sum).toFixed(2) + ' 积分') : '—';
     html += '<tr class="hover:bg-slate-800/40 transition">' +
       '<td class="py-2.5 px-2 text-slate-500">#' + (i + 1) + '</td>' +
       '<td class="py-2.5 px-2 text-slate-400">' + escapeHtml(truncateTime(v.last_seen)) + '</td>' +
       '<td class="py-2.5 px-2 font-medium text-slate-200 truncate max-w-[200px]" title="' + escapeHtml(uid) + '"><span class="text-indigo-300">' + escapeHtml(uid) + '</span></td>' +
-      '<td class="py-2.5 px-2 text-slate-300">' + fmtInt(v.requests) + '</td>' +
-      '<td class="py-2.5 px-2">' + (failed ? '<span class="text-rose-400 font-bold">失败 ' + failed + '</span>' : '<span class="text-emerald-400 font-bold">全部成功</span>') + '</td>' +
+      '<td class="py-2.5 px-2 text-slate-400">—</td>' +
+      '<td class="py-2.5 px-2 text-amber-400 font-bold">' + acctCost + '</td>' +
+      '<td class="py-2.5 px-2 text-cyan-300">' + fmtInt(c) + '</td>' +
       '<td class="py-2.5 px-2 text-slate-400">' + fmtNoObs(v.avg_ttfb_ms, 'ms') + '</td>' +
       '<td class="py-2.5 px-2 text-slate-300">' + fmtNoObs(v.avg_latency_ms, 'ms') + '</td>' +
-      '<td class="py-2.5 px-2 text-cyan-300">' + fmtInt(c) + '</td>' +
-      '<td class="py-2.5 px-2 text-right text-indigo-400">' + tps + '</td>' +
+      '<td class="py-2.5 px-2 text-right">' + (failed ? '<span class="text-rose-400 font-bold">失败 ' + failed + '</span>' : '<span class="text-emerald-400 font-bold">全部成功</span>') + '</td>' +
       '</tr>';
   }
   tbody.innerHTML = html;
@@ -1192,6 +1230,8 @@ async function sendChatMessage() {
       if (box) box.innerText = '请求失败 [' + res.status + ']: ' + ((j && j.error) ? JSON.stringify(j.error) : t.slice(0, 400));
       return;
     }
+    var creditCostHeader = res.headers.get('X-Credit-Cost');
+    var lastCreditCost = null;
     var reader = res.body.getReader();
     var dec = new TextDecoder('utf-8');
     var buf = '';
@@ -1213,6 +1253,9 @@ async function sendChatMessage() {
         if (payload === '[DONE]') continue;
         var chunk = null; try { chunk = JSON.parse(payload); } catch (e) { continue; }
         if (chunk.error) { full += '\n[错误] ' + JSON.stringify(chunk.error); continue; }
+        if (chunk.usage && (chunk.usage.credit_cost !== undefined || chunk.usage.credits !== undefined)) {
+          lastCreditCost = chunk.usage.credit_cost !== undefined ? chunk.usage.credit_cost : chunk.usage.credits;
+        }
         var d = chunk.choices && chunk.choices[0] && chunk.choices[0].delta;
         if (d) {
           if (d.reasoning_content) {
@@ -1236,7 +1279,9 @@ async function sendChatMessage() {
     if (box && !full) box.innerText = '（已收到完成响应，但内容为空）';
     var elapsedSec = (Date.now() - t0) / 1000;
     var speedText = (elapsedSec > 0 && full.length > 0) ? (' · ' + (full.length / elapsedSec).toFixed(1) + ' 字/s') : '';
-    if (timing) timing.innerText = '耗时: ' + elapsedSec.toFixed(2) + 's' + (ttfb !== null ? ' · 首字节 ' + ttfb + 'ms' : '') + speedText;
+    var finalCost = creditCostHeader || (lastCreditCost !== null ? Number(lastCreditCost).toFixed(2) : null);
+    var creditText = finalCost ? (' · 消耗积分: ' + Number(finalCost).toFixed(2)) : '';
+    if (timing) timing.innerText = '耗时: ' + elapsedSec.toFixed(2) + 's' + (ttfb !== null ? ' · 首字节 ' + ttfb + 'ms' : '') + speedText + creditText;
   } catch (e) {
     if (box) box.innerText += '\n[网络或响应异常] ' + errText(e);
   } finally {

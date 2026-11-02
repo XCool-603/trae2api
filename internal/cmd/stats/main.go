@@ -210,15 +210,16 @@ type statsResp struct {
 }
 
 type modelView struct {
-	Requests     int64 `json:"requests"`
-	Success      int64 `json:"success"`
-	Failed       int64 `json:"failed"`
-	Streaming    int64 `json:"streaming"`
-	AvgTTFBMS    int64 `json:"avg_ttfb_ms"`
-	AvgLatencyMS int64 `json:"avg_latency_ms"`
-	UsageCount   int64 `json:"usage_count"`
-	TotalTokens  int64 `json:"total_tokens"`
-	CacheHitRate int64 `json:"cache_hit_rate_percent"`
+	Requests     int64   `json:"requests"`
+	Success      int64   `json:"success"`
+	Failed       int64   `json:"failed"`
+	Streaming    int64   `json:"streaming"`
+	AvgTTFBMS    int64   `json:"avg_ttfb_ms"`
+	AvgLatencyMS int64   `json:"avg_latency_ms"`
+	UsageCount   int64   `json:"usage_count"`
+	TotalTokens  int64   `json:"total_tokens"`
+	CacheHitRate int64   `json:"cache_hit_rate_percent"`
+	CreditSum    float64 `json:"credit_sum"`
 }
 
 // statusResp 对应 /status（只取仪表盘要显示的字段）。
@@ -297,9 +298,7 @@ func buildFrame(opt options, cols int) ([]string, error) {
 		fmtSentinel(g.AvgTTFBMS, "ms"), fmtSentinel(g.AvgLatencyMS, "ms")))
 	out = append(out, fmt.Sprintf("  累计 token %d   缓存命中率 %s（hit %d / miss %d）",
 		g.TotalTokens, fmtSentinel(g.CacheHitRate, "%"), g.CacheHit, g.CacheMiss))
-	if g.CreditSum > 0 {
-		out = append(out, fmt.Sprintf("  累计积分消耗 %.2f", g.CreditSum))
-	}
+	out = append(out, fmt.Sprintf("  累计积分消耗 %.2f", g.CreditSum))
 	out = append(out, "")
 
 	// ---- 分模型 ----
@@ -319,13 +318,14 @@ func buildFrame(opt options, cols int) ([]string, error) {
 			}
 			return list[i].k < list[j].k
 		})
-		t := &cli.Table{Headers: []string{"模型", "请求", "成功/失败", "TTFB", "耗时", "token", "命中率"}}
+		t := &cli.Table{Headers: []string{"模型", "积分", "请求", "成功/失败", "TTFB", "耗时", "token", "命中率"}}
 		for i, e := range list {
 			if opt.maxModel > 0 && i >= opt.maxModel {
 				out = append(out, fmt.Sprintf("  … 另有 %d 个模型未显示（-models 调整）", len(list)-i))
 				break
 			}
-			t.Add(e.k, fmt.Sprintf("%d", e.v.Requests),
+			t.Add(e.k, fmt.Sprintf("%.2f", e.v.CreditSum),
+				fmt.Sprintf("%d", e.v.Requests),
 				fmt.Sprintf("%d/%d", e.v.Success, e.v.Failed),
 				fmtSentinel(e.v.AvgTTFBMS, "ms"),
 				fmtSentinel(e.v.AvgLatencyMS, "ms"),
@@ -345,9 +345,10 @@ func buildFrame(opt options, cols int) ([]string, error) {
 		if opt.maxDays > 0 && len(days) > opt.maxDays {
 			days = days[len(days)-opt.maxDays:]
 		}
-		t := &cli.Table{Headers: []string{"日期", "请求", "成功", "失败", "耗时", "token", "命中率"}}
+		t := &cli.Table{Headers: []string{"日期", "积分", "请求", "成功", "失败", "耗时", "token", "命中率"}}
 		for _, d := range days {
-			t.Add(d.Day, fmt.Sprintf("%d", d.View.Requests),
+			t.Add(d.Day, fmt.Sprintf("%.2f", d.View.CreditSum),
+				fmt.Sprintf("%d", d.View.Requests),
 				fmt.Sprintf("%d", d.View.Success), fmt.Sprintf("%d", d.View.Failed),
 				fmtSentinel(d.View.AvgLatencyMS, "ms"),
 				fmt.Sprintf("%d", d.View.TotalTokens),

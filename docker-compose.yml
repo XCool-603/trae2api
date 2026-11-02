@@ -16,7 +16,7 @@ services:
       context: .
       dockerfile: Dockerfile
       args:
-        APP_VERSION: "${APP_VERSION:-0.2.5}"
+        APP_VERSION: "${APP_VERSION:-0.2.6}"
         # 需要与宿主 UID 对齐时才传（绑定挂载场景）。
         # ⚠️ 不要传 1000：alpine 里没有 1000 号用户，但很多基础镜像已占用它；
         #    本项目默认用 10001，绑定挂载到宿主时通常也不需要改（见 README）。

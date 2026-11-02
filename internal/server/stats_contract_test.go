@@ -147,6 +147,15 @@ func TestStatsResponseShape(t *testing.T) {
 	if _, ok := first["view"].(map[string]any); !ok {
 		t.Errorf("by_day[].view 应为对象，实际 %T", first["view"])
 	}
+
+	// ---- recent_requests 是数组 ----
+	recent, ok := statsObj["recent_requests"].([]any)
+	if !ok {
+		t.Fatalf("stats.recent_requests 不是数组: %T", statsObj["recent_requests"])
+	}
+	if len(recent) == 0 {
+		t.Fatal("recent_requests 为空")
+	}
 }
 
 // TestStatsDisabledMetrics 指标关闭时 /v1/stats 应给出明确错误而不是空对象。

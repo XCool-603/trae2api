@@ -91,7 +91,7 @@ func newPromptRewriter(cfg *config.Config) *prompt.Rewriter {
 // 二进制 `version` 却报 0.1.0。发布流程从没跑过，所以一直没人发现。
 //
 // 这个默认值是**本地 go build 出来的**二进制会报的版本（不含 tag 信息）。
-var Version = "0.2.5"
+var Version = "0.2.6"
 
 // ServiceName 网关身份标识（/healthz 透出，便于宿主识别"假成功"）。
 const ServiceName = "trae2api"
@@ -809,6 +809,11 @@ func (s *chatStat) setAccount(uid, label string) { s.accountUID, s.accountLbl = 
 
 func (s *chatStat) setRealm(r string) { s.realm = r }
 
+func (s *chatStat) setCredits(c float64) {
+	s.credits = c
+	s.hasCredits = true
+}
+
 // markFailed 标记本次请求失败（供指标统计成功率）。
 func (s *chatStat) markFailed() { s.success = false }
 
@@ -850,8 +855,12 @@ func (s *chatStat) done() {
 	if acct == "" {
 		acct = "-"
 	}
-	log.Printf("[req] %-28s %-6s acct=%-28s finish=%-11s tok=%-10s total=%s",
-		s.model, s.mode, acct, s.finishReason(), tok, total.Round(time.Millisecond))
+	cred := "-"
+	if s.hasCredits {
+		cred = fmt.Sprintf("%.2f", s.credits)
+	}
+	log.Printf("[req] %-28s %-6s acct=%-28s finish=%-11s tok=%-10s credit=%-6s total=%s",
+		s.model, s.mode, acct, s.finishReason(), tok, cred, total.Round(time.Millisecond))
 
 	if s.collector == nil {
 		return
@@ -869,7 +878,7 @@ func (s *chatStat) done() {
 		CacheHit: s.cacheHit, CacheMiss: s.cacheMiss, CacheWrite: s.cacheWr,
 		HasUsage:   s.hasUsage,
 		Credits:    s.credits,
-		HasCredits: s.hasCredits,
+		HasCredits: s.hasCredits && s.success,
 		At:         s.start,
 	})
 }

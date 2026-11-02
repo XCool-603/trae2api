@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"time"
 	"trae2api/internal/realm"
 	"trae2api/internal/traectl"
 	"trae2api/internal/usermgr"
@@ -108,6 +109,12 @@ func (s *Server) handleAnthropicMessages(w http.ResponseWriter, r *http.Request)
 
 	// 3. 将 Anthropic 结构转为内部 traectl.ChatRequest
 	creq := s.convertAnthropicToChatRequest(req, bareModel)
+	cost := s.modelCreditCost(ch, bareModel)
+	st := newChatStat(time.Now(), req.Model, req.Stream)
+	st.setRealm(realmKey)
+	st.setCredits(cost)
+	st.collector = s.metrics
+	defer st.done()
 
 	owners := []string{""}
 	if caller != nil && caller.Role != usermgr.RoleAdmin {
@@ -125,6 +132,7 @@ func (s *Server) handleAnthropicMessages(w http.ResponseWriter, r *http.Request)
 		if !s.pool.Acquire(acct.UID) {
 			continue
 		}
+		st.setAccount(acct.UID, acct.Label)
 
 		cl := ch.ClientFor(acct)
 		cl.OnRefresh = func(product, expiresAt string) {
@@ -133,9 +141,9 @@ func (s *Server) handleAnthropicMessages(w http.ResponseWriter, r *http.Request)
 
 		var runErr error
 		if !req.Stream {
-			runErr = s.runAnthropicNonStream(w, r.Context(), cl, creq, req.Model, bareModel, caller)
+			runErr = s.runAnthropicNonStream(w, r.Context(), cl, creq, req.Model, bareModel, caller, cost, st)
 		} else {
-			runErr = s.runAnthropicStream(w, r.Context(), cl, creq, req.Model, bareModel, caller)
+			runErr = s.runAnthropicStream(w, r.Context(), cl, creq, req.Model, bareModel, caller, cost, st)
 		}
 
 		s.pool.Release(acct.UID)
@@ -146,10 +154,12 @@ func (s *Server) handleAnthropicMessages(w http.ResponseWriter, r *http.Request)
 		lastErr = runErr
 		s.noteFailure(ch, acct, bareModel, runErr)
 		if errors.Is(runErr, errAlreadyStreaming) {
+			st.markFailed()
 			return
 		}
 	}
 
+	st.markFailed()
 	if lastErr != nil {
 		writeAnthropicError(w, http.StatusBadGateway, "api_error", lastErr.Error())
 		return
@@ -236,7 +246,7 @@ func (s *Server) convertAnthropicToChatRequest(req anthropicRequest, bareModel s
 	}
 }
 
-func (s *Server) runAnthropicNonStream(w http.ResponseWriter, ctx context.Context, cl *traectl.Client, creq traectl.ChatRequest, outModel, bareModel string, caller *usermgr.User) error {
+func (s *Server) runAnthropicNonStream(w http.ResponseWriter, ctx context.Context, cl *traectl.Client, creq traectl.ChatRequest, outModel, bareModel string, caller *usermgr.User, cost float64, st *chatStat) error {
 	agg, err := cl.Aggregate(ctx, creq)
 	if err != nil {
 		return err
@@ -254,16 +264,24 @@ func (s *Server) runAnthropicNonStream(w http.ResponseWriter, ctx context.Contex
 		"usage": map[string]any{
 			"input_tokens":  agg.Usage.PromptTokens,
 			"output_tokens": agg.Usage.CompletionTokens,
+			"credits":       cost,
+			"credit_cost":   cost,
 		},
+	}
+	if cost > 0 {
+		w.Header().Set("X-Credit-Cost", fmt.Sprintf("%.2f", cost))
 	}
 	if caller != nil && s.users != nil && agg.Usage != nil {
 		s.users.DeductQuota(caller.ID, int64(agg.Usage.TotalTokens))
+	}
+	if st != nil {
+		st.recordUsage(agg.Usage)
 	}
 	writeJSON(w, http.StatusOK, resp)
 	return nil
 }
 
-func (s *Server) runAnthropicStream(w http.ResponseWriter, ctx context.Context, cl *traectl.Client, creq traectl.ChatRequest, outModel, bareModel string, caller *usermgr.User) error {
+func (s *Server) runAnthropicStream(w http.ResponseWriter, ctx context.Context, cl *traectl.Client, creq traectl.ChatRequest, outModel, bareModel string, caller *usermgr.User, cost float64, st *chatStat) error {
 	flusher, _ := w.(http.Flusher)
 	id := "msg_" + randHex(20)
 
@@ -277,6 +295,9 @@ func (s *Server) runAnthropicStream(w http.ResponseWriter, ctx context.Context, 
 		w.Header().Set("Cache-Control", "no-cache")
 		w.Header().Set("Connection", "keep-alive")
 		w.Header().Set("X-Accel-Buffering", "no")
+		if cost > 0 {
+			w.Header().Set("X-Credit-Cost", fmt.Sprintf("%.2f", cost))
+		}
 		w.WriteHeader(http.StatusOK)
 	}
 
@@ -346,12 +367,19 @@ func (s *Server) runAnthropicStream(w http.ResponseWriter, ctx context.Context, 
 	sendEvent("message_delta", map[string]any{
 		"type":  "message_delta",
 		"delta": map[string]any{"stop_reason": "end_turn", "stop_sequence": nil},
-		"usage": map[string]any{"output_tokens": outTokens},
+		"usage": map[string]any{
+			"output_tokens": outTokens,
+			"credits":       cost,
+			"credit_cost":   cost,
+		},
 	})
 	sendEvent("message_stop", map[string]any{"type": "message_stop"})
 
 	if caller != nil && s.users != nil && tokensUsed > 0 {
 		s.users.DeductQuota(caller.ID, tokensUsed)
+	}
+	if st != nil {
+		st.recordUsage(usage)
 	}
 	_ = inTokens
 	return nil

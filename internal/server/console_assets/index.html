@@ -34,7 +34,7 @@
               PRO
             </span>
             <button id="versionBadgeBtn" onclick="checkAppUpdate(true)" title="点击检查更新" class="px-2 py-0.5 text-[10px] font-mono rounded-full bg-slate-800 text-slate-400 border border-slate-700 hover:border-indigo-500 transition flex items-center gap-1">
-              <span id="appVersionText">0.2.5</span>
+              <span id="appVersionText">0.2.6</span>
               <span id="updateAvailableDot" class="w-1.5 h-1.5 rounded-full bg-amber-400 animate-ping hidden"></span>
             </button>
           </div>
@@ -448,8 +448,16 @@
           </div>
         </div>
 
-        <!-- Current Scope 4 metrics -->
-        <div class="grid grid-cols-2 sm:grid-cols-4 gap-4">
+        <!-- Current Scope 5 metrics -->
+        <div class="grid grid-cols-2 sm:grid-cols-5 gap-4">
+          <div class="bg-slate-900/60 p-4 rounded-xl border border-slate-800/80">
+            <div class="flex items-center justify-between">
+              <span id="labelTotalCredits" class="text-[11px] font-medium text-slate-400">消耗积分</span>
+              <span id="badgeCreditsScope" class="text-[10px] font-mono px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-300">积分</span>
+            </div>
+            <div id="statTotalCredits" class="text-2xl font-bold font-mono text-amber-400 mt-1">0.00</div>
+            <div class="text-[10px] text-slate-500 mt-1">按模型倍率实际扣减</div>
+          </div>
           <div class="bg-slate-900/60 p-4 rounded-xl border border-slate-800/80">
             <div class="flex items-center justify-between">
               <span id="labelTotalTokens" class="text-[11px] font-medium text-slate-400">今日消耗 Token</span>
@@ -490,6 +498,7 @@
                 <tr class="text-slate-400 border-b border-slate-800/80 pb-2">
                   <th class="py-2.5 px-3 font-medium">模型名称</th>
                   <th class="py-2.5 px-3 font-medium">倍率</th>
+                  <th class="py-2.5 px-3 font-medium text-amber-400">消耗积分</th>
                   <th class="py-2.5 px-3 font-medium">请求量</th>
                   <th class="py-2.5 px-3 font-medium">总 Tokens</th>
                   <th class="py-2.5 px-3 font-medium">输入 (Prompt)</th>
@@ -501,7 +510,7 @@
               </thead>
               <tbody id="tokenModelsTable" class="divide-y divide-slate-800/40 text-slate-300">
                 <tr>
-                  <td colspan="9" class="py-6 text-center text-slate-500 font-sans">暂无模型调用数据，调用后自动在此按天记录</td>
+                  <td colspan="10" class="py-6 text-center text-slate-500 font-sans">暂无模型调用数据，调用后自动在此按天记录</td>
                 </tr>
               </tbody>
             </table>
@@ -522,6 +531,7 @@
               <thead>
                 <tr class="text-slate-400 border-b border-slate-800/80 pb-2">
                   <th class="py-2.5 px-3 font-medium">日期</th>
+                  <th class="py-2.5 px-3 font-medium text-amber-400">消耗积分</th>
                   <th class="py-2.5 px-3 font-medium">总请求数</th>
                   <th class="py-2.5 px-3 font-medium">成功率</th>
                   <th class="py-2.5 px-3 font-medium">总消耗 Tokens</th>
@@ -533,7 +543,7 @@
               </thead>
               <tbody id="dailyHistoryTable" class="divide-y divide-slate-800/40 text-slate-300">
                 <tr>
-                  <td colspan="8" class="py-6 text-center text-slate-500 font-sans">暂无历史天数统计数据</td>
+                  <td colspan="9" class="py-6 text-center text-slate-500 font-sans">暂无历史天数统计数据</td>
                 </tr>
               </tbody>
             </table>
@@ -636,7 +646,7 @@
               <span class="w-2 h-2 rounded-full bg-amber-400"></span>
               <span>实时网关请求流水</span>
             </h2>
-            <p class="text-xs text-slate-400 mt-0.5">按账号聚合的调度与用量记录（本网关无逐请求流水端点，此表由 /v1/stats 的 by_account 派生）</p>
+            <p class="text-xs text-slate-400 mt-0.5">记录网关最近调用的单次请求明细与单次积分扣减流水</p>
           </div>
           <div class="flex items-center gap-2">
             <span id="logCountBadge" class="text-xs px-2 py-0.5 rounded-full bg-slate-800 text-slate-300 font-mono">0 条</span>
@@ -651,14 +661,14 @@
             <thead>
               <tr class="text-slate-400 border-b border-slate-800/80 pb-2">
                 <th class="py-2 px-2 font-medium">序号</th>
-                <th class="py-2 px-2 font-medium">最近调用</th>
-                <th class="py-2 px-2 font-medium">账号（路由）</th>
-                <th class="py-2 px-2 font-medium">请求数</th>
-                <th class="py-2 px-2 font-medium">成功 / 失败</th>
-                <th class="py-2 px-2 font-medium">平均TTFB</th>
-                <th class="py-2 px-2 font-medium">平均耗时</th>
-                <th class="py-2 px-2 font-medium">生成Token</th>
-                <th class="py-2 px-2 font-medium text-right">速率</th>
+                <th class="py-2 px-2 font-medium">时间</th>
+                <th class="py-2 px-2 font-medium">模型</th>
+                <th class="py-2 px-2 font-medium">账号</th>
+                <th class="py-2 px-2 font-medium text-amber-400">单次积分</th>
+                <th class="py-2 px-2 font-medium">Tokens</th>
+                <th class="py-2 px-2 font-medium">首字节</th>
+                <th class="py-2 px-2 font-medium">总耗时</th>
+                <th class="py-2 px-2 font-medium text-right">状态</th>
               </tr>
             </thead>
             <tbody id="requestLogsTable" class="divide-y divide-slate-800/40 text-slate-300">
@@ -1321,7 +1331,7 @@ eyJhbGciOi...----refresh_token_here'></textarea>
       <div id="updateStateResult" class="space-y-4 hidden">
         <div class="flex items-center justify-between p-3.5 bg-slate-900/60 rounded-xl border border-slate-800">
           <div>
-            <div class="text-xs text-slate-400">当前版本: <span id="updateModalCurVer" class="font-mono text-slate-200">0.2.5</span></div>
+            <div class="text-xs text-slate-400">当前版本: <span id="updateModalCurVer" class="font-mono text-slate-200">0.2.6</span></div>
             <div class="text-sm font-bold text-white mt-0.5">最新版本: <span id="updateModalLatestVer" class="font-mono text-indigo-400">—</span></div>
           </div>
           <div id="updateStatusBadge" class="text-xs font-semibold px-3 py-1 rounded-full"></div>

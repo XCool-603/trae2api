@@ -369,3 +369,48 @@ func TestCreditsObservation(t *testing.T) {
 		t.Errorf("avg_credits_x1000 = %d want 3000（不能被无观测样本稀释）", v.AvgCredits)
 	}
 }
+
+// TestRecentRequestsRingBuffer 验证最近请求流水环形缓冲。
+func TestRecentRequestsRingBuffer(t *testing.T) {
+	c := New(Options{RetainDays: 14})
+	c.maxRecent = 3
+
+	s1 := sample("m1", true, true)
+	s1.Credits = 1.0
+	c.Record(s1)
+
+	s2 := sample("m2", true, true)
+	s2.Credits = 0.25
+	c.Record(s2)
+
+	s3 := sample("m3", true, true)
+	s3.Credits = 1.5
+	c.Record(s3)
+
+	snap := c.Snapshot()
+	if len(snap.RecentRequests) != 3 {
+		t.Fatalf("recent length = %d want 3", len(snap.RecentRequests))
+	}
+	// 最新的排在最前面
+	if snap.RecentRequests[0].Model != "m3" || snap.RecentRequests[0].CreditCost != 1.5 {
+		t.Errorf("first recent = %+v want m3 with 1.5 credits", snap.RecentRequests[0])
+	}
+
+	// 压入第 4 条，应淘汰第 1 条
+	s4 := sample("m4", true, true)
+	s4.Credits = 0.08
+	c.Record(s4)
+
+	snap = c.Snapshot()
+	if len(snap.RecentRequests) != 3 {
+		t.Fatalf("recent length = %d want 3", len(snap.RecentRequests))
+	}
+	if snap.RecentRequests[0].Model != "m4" || snap.RecentRequests[2].Model != "m2" {
+		t.Errorf("unexpected recent list: %+v", snap.RecentRequests)
+	}
+
+	c.Reset()
+	if len(c.Snapshot().RecentRequests) != 0 {
+		t.Errorf("Reset 后 recent 仍有残留")
+	}
+}

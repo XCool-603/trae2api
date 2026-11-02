@@ -62,6 +62,21 @@ type Sample struct {
 	At time.Time
 }
 
+// RequestRecord 是一次调用的观测流水记录（保留最近 N 条，供控制台逐条呈现）。
+type RequestRecord struct {
+	Time             string  `json:"time"`
+	Model            string  `json:"model"`
+	Account          string  `json:"account"`
+	Streaming        bool    `json:"streaming"`
+	Success          bool    `json:"success"`
+	PromptTokens     int64   `json:"prompt_tokens"`
+	CompletionTokens int64   `json:"completion_tokens"`
+	TotalTokens      int64   `json:"total_tokens"`
+	CreditCost       float64 `json:"credit_cost"`
+	LatencyMS        int64   `json:"latency_ms"`
+	TTFBMS           int64   `json:"ttfb_ms"`
+}
+
 // Agg 是一组样本的聚合。
 //
 // 所有计数字段都是 int64，便于原子累加与 JSON 序列化。
@@ -208,6 +223,9 @@ type Collector struct {
 
 	dirty    bool
 	lastSave time.Time
+
+	recent    []RequestRecord
+	maxRecent int
 }
 
 // Options 构造参数。
@@ -230,6 +248,7 @@ func New(opt Options) *Collector {
 		byDay:      map[string]*Agg{},
 		retainDays: opt.RetainDays,
 		stateFile:  opt.StateFile,
+		maxRecent:  100,
 	}
 }
 
@@ -293,6 +312,30 @@ func (c *Collector) Record(s Sample) {
 	apply(c.bucket(c.byDay, dayKey(s.At)))
 
 	c.dirty = true
+
+	if s.Model != "" || s.Account != "" {
+		if c.maxRecent <= 0 {
+			c.maxRecent = 100
+		}
+		rec := RequestRecord{
+			Time:             s.At.Format("15:04:05"),
+			Model:            s.Model,
+			Account:          s.Account,
+			Streaming:        s.Streaming,
+			Success:          s.Success,
+			PromptTokens:     s.PromptTokens,
+			CompletionTokens: s.CompletionTokens,
+			TotalTokens:      s.PromptTokens + s.CompletionTokens,
+			CreditCost:       s.Credits,
+			LatencyMS:        s.LatencyMS,
+			TTFBMS:           s.TTFBMS,
+		}
+		if len(c.recent) >= c.maxRecent {
+			c.recent = append(c.recent[1:], rec)
+		} else {
+			c.recent = append(c.recent, rec)
+		}
+	}
 }
 
 // bucket 取或建一个分桶（调用方持锁）。
@@ -316,6 +359,8 @@ type Snapshot struct {
 	RetainDays int       `json:"retain_days"`
 	// NoObservation 是哨兵值，供前端判断"此项无观测"。
 	NoObservation int64 `json:"no_observation_sentinel"`
+	// RecentRequests 最近请求调用流水（最新的在前）。
+	RecentRequests []RequestRecord `json:"recent_requests"`
 }
 
 // DayView 是一天的聚合（带日期键）。
@@ -358,6 +403,11 @@ func (c *Collector) Snapshot() Snapshot {
 	for _, d := range days {
 		s.ByDay = append(s.ByDay, DayView{Day: d, View: c.byDay[d].View()})
 	}
+	recentCopy := make([]RequestRecord, len(c.recent))
+	for i := range c.recent {
+		recentCopy[len(c.recent)-1-i] = c.recent[i]
+	}
+	s.RecentRequests = recentCopy
 	return s
 }
 
@@ -386,6 +436,7 @@ func (c *Collector) Reset() {
 	c.byAccount = map[string]*Agg{}
 	c.byRealm = map[string]*Agg{}
 	c.byDay = map[string]*Agg{}
+	c.recent = nil
 	c.dirty = true
 }
 
