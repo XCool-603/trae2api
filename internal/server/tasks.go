@@ -53,7 +53,7 @@ func (s *Server) CheckinAll(ctx context.Context) []CheckinOutcome {
 			if err != nil {
 				oc.Status = "failed"
 				oc.Detail = err.Error()
-				s.pool.NoteError(a.UID)
+				// 签到失败（如高峰期 9074 限流）仅属于签到任务异常，绝不惩罚聊天账号熔断降级
 				log.Printf("WARN: 签到失败 %s: %v", a.UID, err)
 				out = append(out, oc)
 				continue

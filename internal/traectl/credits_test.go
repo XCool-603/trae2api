@@ -430,6 +430,39 @@ func TestCheckinClaimErrorCodeRejected(t *testing.T) {
 	}
 }
 
+// TestCheckinClaimCode9074Retry 测试遇到 9074 时自动退避重试并成功。
+func TestCheckinClaimCode9074Retry(t *testing.T) {
+	attempts := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Path == pathCheckinClaim {
+			attempts++
+			if attempts < 2 {
+				_, _ = w.Write([]byte(`{"code":9074,"message":"当前参与用户太多，请稍后再试"}`))
+				return
+			}
+			_, _ = w.Write([]byte(`{"code":0,"message":"success"}`))
+		}
+	}))
+	defer srv.Close()
+
+	store := testUGStore(srv.URL)
+	origDev := store.DeviceID
+	res, err := store.CheckinClaim(context.Background())
+	if err != nil {
+		t.Fatalf("遇到 9074 重试后应成功，得到错误: %v", err)
+	}
+	if res == nil || res.Code != 0 {
+		t.Fatalf("res 应为成功: %+v", res)
+	}
+	if attempts < 2 {
+		t.Errorf("应重试至少 2 次，实际: %d", attempts)
+	}
+	if store.DeviceID != origDev {
+		t.Errorf("store.DeviceID 不应被篡改: got %q, want %q", store.DeviceID, origDev)
+	}
+}
+
 // TestCheckinSkipIntlAndSolo 国际版与 SOLO 账号无签到体系。
 func TestCheckinSkipIntlAndSolo(t *testing.T) {
 	intlStore := &Store{

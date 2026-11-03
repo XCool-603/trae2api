@@ -184,6 +184,10 @@ func (s *Store) postUG(ctx context.Context, path string, out any) error {
 }
 
 func (s *Store) postUGWithRetry(ctx context.Context, path string, out any, allowRefresh bool) error {
+	return s.postUGWithRetryDev(ctx, path, out, allowRefresh, "")
+}
+
+func (s *Store) postUGWithRetryDev(ctx context.Context, path string, out any, allowRefresh bool, overrideDevID string) error {
 	s.mu.Lock()
 	cred := s.Cred
 	deviceID := s.DeviceID
@@ -198,7 +202,10 @@ func (s *Store) postUGWithRetry(ctx context.Context, path string, out any, allow
 		host = DefaultUGHost
 	}
 
-	devID := deviceID
+	devID := overrideDevID
+	if devID == "" {
+		devID = deviceID
+	}
 	if !isNumericDeviceID(devID) {
 		devID = randomNumericDeviceID()
 	}
@@ -226,7 +233,7 @@ func (s *Store) postUGWithRetry(ctx context.Context, path string, out any, allow
 	if resp.StatusCode == http.StatusUnauthorized && allowRefresh {
 		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<16))
 		if rerr := s.Refresh(ctx); rerr == nil {
-			return s.postUGWithRetry(ctx, path, out, false)
+			return s.postUGWithRetryDev(ctx, path, out, false, overrideDevID)
 		}
 	}
 
@@ -310,26 +317,44 @@ func (s *Store) CheckinStatus(ctx context.Context) (*CheckinStatus, error) {
 // CheckinClaim 执行签到。
 //
 // 幂等性与频控保护：
-//   - 若遇到 9074（当前使用人数太多），因 9074 为设备号级频控，自动轮换全新 16 位数字设备号重试一次。
+//   - 若遇到 9074（当前参与用户太多/排队降级），属于上游并发限流与设备级频控，
+//     采用随机退避（1~3秒抖动）+ 轮换全新 16 位数字设备号自动重试（最多 3 次）。
 //   - 上游业务码非 0 必须向外报告错误，绝不静默当作成功。
 func (s *Store) CheckinClaim(ctx context.Context) (*CheckinResult, error) {
 	if s.skipCheckin() {
 		return &CheckinResult{Code: 0, Message: "该产品无签到体系"}, nil
 	}
 	var r CheckinResult
-	if err := s.postUG(ctx, pathCheckinClaim, &r); err != nil {
-		return nil, err
+	s.mu.Lock()
+	devID := s.DeviceID
+	s.mu.Unlock()
+	if !isNumericDeviceID(devID) {
+		devID = randomNumericDeviceID()
 	}
-	// 如果遇到 9074（当前使用人数太多，属于设备级频控），换全新 16 位数字设备号重试一次
-	if r.Code == 9074 {
-		newDev := randomNumericDeviceID()
-		s.mu.Lock()
-		s.DeviceID = newDev
-		s.mu.Unlock()
-		if err := s.postUG(ctx, pathCheckinClaim, &r); err != nil {
+
+	maxRetries := 3
+	for attempt := 0; attempt <= maxRetries; attempt++ {
+		r = CheckinResult{}
+		if err := s.postUGWithRetryDev(ctx, pathCheckinClaim, &r, true, devID); err != nil {
 			return nil, err
 		}
+		if r.Code == 0 {
+			return &r, nil
+		}
+		// 如果遇到 9074（当前参与用户太多，属于高峰期排队/设备频控），换全新 16 位数字设备号并随机退避重试
+		if r.Code == 9074 && attempt < maxRetries {
+			devID = randomNumericDeviceID()
+			backoff := time.Duration(1000*(attempt+1)+int(time.Now().UnixNano()%1500)) * time.Millisecond
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-time.After(backoff):
+			}
+			continue
+		}
+		break
 	}
+
 	if r.Code != 0 {
 		return &r, &UGError{HTTPStatus: 200, Code: r.Code, Message: r.Message, Path: pathCheckinClaim}
 	}
