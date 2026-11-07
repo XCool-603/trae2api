@@ -124,9 +124,18 @@ func (s *Server) handleAnthropicMessages(w http.ResponseWriter, r *http.Request)
 
 	var lastErr error
 	for attempt := 0; attempt < s.maxRotate; attempt++ {
-		acct := s.pickWithWait(r.Context(), realmKey, bareModel, owners, tried)
+		var newCh *Channel
+		var newRealm string
+		acct, newCh, newRealm := s.pickAccountWithFailover(r.Context(), ch, realmKey, bareModel, owners, tried)
 		if acct == nil {
 			break
+		}
+		if newRealm != realmKey {
+			ch = newCh
+			realmKey = newRealm
+			st.setRealm(realmKey)
+			cost = s.modelCreditCost(ch, bareModel)
+			st.setCredits(cost)
 		}
 		tried[acct.UID] = true
 		if !s.pool.Acquire(acct.UID) {

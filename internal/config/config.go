@@ -119,6 +119,9 @@ type Config struct {
 		// 而不是转上去让上游回一个笼统的 4001 —— 后者会让用户完全看不出
 		// 问题出在图片上。
 		VisionEnabled bool `json:"vision_enabled"`
+		// CrossRealmFailover 当请求的目标版本域（如国内版 trae）全部账号不可用或额度耗尽时，
+		// 是否自动容灾切换到配对版本域（如国际版 trae-intl）的可用账号（默认 true）。
+		CrossRealmFailover *bool `json:"cross_realm_failover"`
 		// Proxy 全局出站代理（可选，支持 http/https/socks5，例如 "socks5://127.0.0.1:1080"）。
 		// 账号未单独配置 proxy 时默认使用此代理；留空则按环境变量系统代理。
 		Proxy string `json:"proxy"`
@@ -368,6 +371,11 @@ func boolPtr(b bool) *bool { return &b }
 // StrictModelsOn 返回是否启用严格模型名校验（未设置时默认 true）。
 func (c *Config) StrictModelsOn() bool {
 	return c.Trae.StrictModels == nil || *c.Trae.StrictModels
+}
+
+// CrossRealmFailoverOn 返回当目标版本域账号耗尽时是否自动容灾切换到配对版本域（默认 true）。
+func (c *Config) CrossRealmFailoverOn() bool {
+	return c == nil || c.Trae.CrossRealmFailover == nil || *c.Trae.CrossRealmFailover
 }
 
 // stripBOM 去掉 UTF-8 BOM。

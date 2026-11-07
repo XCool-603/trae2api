@@ -938,6 +938,38 @@ func (p *Pool) HealthyIgnoringInflight(realm string) int {
 	return n
 }
 
+// HasLiveAccounts 返回指定 realm 下是否有未在 tried 中、健康且有额度的可用账号。
+// 排除项：disabled / breakerUntil / degradeUntil / coolingUntil / 模型级冷却 / 已知积分 <= 0。
+func (p *Pool) HasLiveAccounts(realm, model string, tried map[string]bool) bool {
+	now := time.Now()
+	for _, a := range p.All() {
+		if realm != "" && a.Realm != realm {
+			continue
+		}
+		if tried != nil && tried[a.UID] {
+			continue
+		}
+		a.mu.Lock()
+		healthy := !a.disabled &&
+			!now.Before(a.breakerUntil) &&
+			!now.Before(a.degradeUntil) &&
+			(a.coolingUntil.IsZero() || !now.Before(a.coolingUntil))
+		if healthy && model != "" {
+			if until, ok := a.modelCooling[model]; ok && now.Before(until) {
+				healthy = false
+			}
+		}
+		if healthy && a.creditsKnown && a.credits <= 0 {
+			healthy = false
+		}
+		a.mu.Unlock()
+		if healthy {
+			return true
+		}
+	}
+	return false
+}
+
 // ServableCount 返回某域内**当前可被调度**的账号数。
 //
 // 与 Healthy 的区别：可调度还要排除"在途已满"（healthy 但此刻没名额）。
