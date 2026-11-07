@@ -708,8 +708,8 @@ func (s *Server) pickWithWait(ctx context.Context, realmKey, model string, owner
 	if a := s.pool.Pick(realmKey, model, owners, tried); a != nil {
 		return a
 	}
-	// 没有健康账号 → 等也没用，立刻返回让上层给出明确原因
-	if s.pool.HealthyIgnoringInflight(realmKey) == 0 {
+	// 没有健康账号或没有未尝试的可用账号 → 等也没用，立刻返回让上层给出明确原因或进行容灾切换
+	if s.pool.HealthyIgnoringInflight(realmKey) == 0 || !s.pool.HasLiveAccounts(realmKey, model, tried) {
 		return nil
 	}
 
@@ -836,22 +836,28 @@ func (s *Server) streamChat(w http.ResponseWriter, ctx context.Context, cl *trae
 	// toolBuf 按 index 聚合工具调用增量（流结束时统一校验并发出）。
 	toolBuf := map[int]*toolAccum{}
 	err := cl.Chat(ctx, creq, func(d traectl.Delta) error {
-		// 任何一帧（含心跳）都说明上游已返回 2xx 并开始吐了 → 可以安全开流。
-		// 心跳帧本身只发一条 SSE 注释，客户端会忽略它，但字节到了就不会超时。
-		if !headersWritten {
-			ensureHeaders()
-		}
-		if !roleSent {
-			roleSent = true
-			writeChunk(map[string]any{"role": "assistant", "content": ""}, nil)
-		}
 		if d.Keepalive {
+			// 如果还没写头，且排队时间较短，暂不提前提交 HTTP 200 响应头，
+			// 以免若紧接着收到限流/4011等错误时无法退回上层换号容灾。
+			if !headersWritten {
+				if time.Since(st.start) < 5*time.Second {
+					return nil
+				}
+				ensureHeaders()
+			}
 			// SSE 注释帧：合法且被所有解析器忽略，只用于"续命"
 			fmt.Fprint(w, ": keepalive\n\n")
 			if flusher != nil {
 				flusher.Flush()
 			}
 			return nil
+		}
+		if !headersWritten {
+			ensureHeaders()
+		}
+		if !roleSent {
+			roleSent = true
+			writeChunk(map[string]any{"role": "assistant", "content": ""}, nil)
 		}
 		if firstByte {
 			firstByte = false
@@ -920,7 +926,7 @@ func (s *Server) streamChat(w http.ResponseWriter, ctx context.Context, cl *trae
 		if flusher != nil {
 			flusher.Flush()
 		}
-		return fmt.Errorf("%w: %v", errAlreadyStreaming, err)
+		return fmt.Errorf("%w: %w", errAlreadyStreaming, err)
 	}
 
 	// 上游正常结束但一个增量都没发（空回复）：补上头与 role，让客户端拿到完整形状

@@ -598,4 +598,117 @@ func TestChatLiveTools(t *testing.T) {
 	}
 }
 
+// TestChatKeepAliveStreamTermination 关键防护：当上游发送 event: done 或 event: error 但保持 TCP 连接不关闭时，
+// 客户端必须立刻结束消费并返回，绝不能一直阻塞在 Scanner.Scan() 中等待 EOF 导致客户端停住/超时卡顿。
+func TestChatKeepAliveStreamTermination(t *testing.T) {
+	// 1. 测试 event: done 场景
+	blockCh1 := make(chan struct{})
+	srvDone := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		if f, ok := w.(http.Flusher); ok {
+			f.Flush()
+		}
+		// 模拟上游吐了几行后发送 done
+		fmt.Fprintf(w, "event: output\ndata: {\"response\":\"第一行\\n\"}\n\n")
+		fmt.Fprintf(w, "event: output\ndata: {\"response\":\"第二行\\n\"}\n\n")
+		fmt.Fprintf(w, "event: done\ndata: {\"finish_reason\":\"stop\"}\n\n")
+		if f, ok := w.(http.Flusher); ok {
+			f.Flush()
+		}
+		// 关键点：保持连接打开不退出 handler，模拟 HTTP Keep-Alive 未断流
+		select {
+		case <-blockCh1:
+		case <-r.Context().Done():
+		}
+	}))
+	defer func() {
+		close(blockCh1)
+		srvDone.Close()
+	}()
+
+	c := &Client{Store: testStore(t, Products[0]), Base: srvDone.URL}
+	doneCh := make(chan struct{})
+	var content string
+	var finish string
+
+	go func() {
+		err := c.Chat(context.Background(), ChatRequest{
+			Model:    "glm-5.2",
+			Messages: []ChatMessage{{Role: "user", Parts: []ChatPart{{Type: "text", Text: "hi"}}}},
+		}, func(d Delta) error {
+			content += d.Content
+			if d.FinishReason != "" {
+				finish = d.FinishReason
+			}
+			return nil
+		})
+		if err != nil {
+			t.Errorf("Chat error: %v", err)
+		}
+		close(doneCh)
+	}()
+
+	select {
+	case <-doneCh:
+		if content != "第一行\n第二行\n" {
+			t.Errorf("content = %q, want %q", content, "第一行\n第二行\n")
+		}
+		if finish != "stop" {
+			t.Errorf("finish = %q, want stop", finish)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("event: done 到达后未能立刻断流结束，流卡死阻塞在扫描器中！")
+	}
+
+	// 2. 测试 event: error（如 4011 限流）未断流场景
+	blockCh2 := make(chan struct{})
+	srvErr := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		if f, ok := w.(http.Flusher); ok {
+			f.Flush()
+		}
+		fmt.Fprintf(w, "event: error\ndata: {\"code\":4011,\"message\":\"requests have exceeded the rate limit\"}\n\n")
+		if f, ok := w.(http.Flusher); ok {
+			f.Flush()
+		}
+		select {
+		case <-blockCh2:
+		case <-r.Context().Done():
+		}
+	}))
+	defer func() {
+		close(blockCh2)
+		srvErr.Close()
+	}()
+
+	cErr := &Client{Store: testStore(t, Products[0]), Base: srvErr.URL}
+	errDoneCh := make(chan struct{})
+	go func() {
+		err := cErr.Chat(context.Background(), ChatRequest{
+			Model:    "glm-5.2",
+			Messages: []ChatMessage{{Role: "user", Parts: []ChatPart{{Type: "text", Text: "hi"}}}},
+		}, func(d Delta) error {
+			return nil
+		})
+		if err == nil {
+			t.Error("4011 应返回错误，实际 nil")
+		}
+		var ue *UpstreamError
+		if !strings.Contains(err.Error(), "4011") {
+			t.Errorf("错误信息应包含 4011，实际: %v", err)
+		}
+		_ = ue
+		close(errDoneCh)
+	}()
+
+	select {
+	case <-errDoneCh:
+		// 成功立刻返回
+	case <-time.After(2 * time.Second):
+		t.Fatal("event: error 到达后未能立刻返回，4011 限流卡死阻塞在扫描器中！")
+	}
+}
+
 var _ = fmt.Sprintf

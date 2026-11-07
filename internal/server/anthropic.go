@@ -324,6 +324,9 @@ func (s *Server) runAnthropicStream(w http.ResponseWriter, ctx context.Context, 
 	tokensUsed := int64(0)
 
 	err := cl.Chat(ctx, creq, func(d traectl.Delta) error {
+		if d.Keepalive {
+			return nil
+		}
 		if first {
 			first = false
 			ensureHeaders()
@@ -362,7 +365,7 @@ func (s *Server) runAnthropicStream(w http.ResponseWriter, ctx context.Context, 
 		if !headersWritten {
 			return err
 		}
-		return fmt.Errorf("%w: %v", errAlreadyStreaming, err)
+		return fmt.Errorf("%w: %w", errAlreadyStreaming, err)
 	}
 
 	sendEvent("content_block_stop", map[string]any{"type": "content_block_stop", "index": 0})

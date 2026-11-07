@@ -725,12 +725,13 @@ func (c *Client) consume(r io.Reader, onDelta func(Delta) error) error {
 	sc.Buffer(make([]byte, 0, 64<<10), 8<<20) // 单帧可能较大（含 multimodal）
 
 	var (
-		event    string
-		sawTool  bool
-		finish   string
-		usage    *Usage
-		upModel  string
-		errEvent *sseError
+		event      string
+		sawTool    bool
+		sawContent bool
+		finish     string
+		usage      *Usage
+		upModel    string
+		errEvent   *sseError
 		// lastKeepalive 是上一次发心跳的时刻（限流用，避免灌满无意义帧）。
 		lastKeepalive time.Time
 	)
@@ -742,9 +743,13 @@ func (c *Client) consume(r io.Reader, onDelta func(Delta) error) error {
 		return onDelta(d)
 	}
 
+scanLoop:
 	for sc.Scan() {
 		line := strings.TrimRight(sc.Text(), "\r")
 		if line == "" {
+			if event == "done" {
+				break scanLoop
+			}
 			event = ""
 			continue
 		}
@@ -763,24 +768,27 @@ func (c *Client) consume(r io.Reader, onDelta func(Delta) error) error {
 			continue
 		}
 
-		switch event {
-		case "output":
+		switch {
+		case event == "output" || (event == "" && (strings.Contains(data, `"response"`) || strings.Contains(data, `"reasoning_content"`))):
 			var o sseOutput
 			if err := json.Unmarshal([]byte(data), &o); err != nil {
 				continue // 未知帧形状：跳过而不是中断整条流
 			}
 			if o.Reasoning != "" {
+				sawContent = true
 				if err := emit(Delta{Reasoning: o.Reasoning}); err != nil {
 					return &consumedError{err}
 				}
 			}
 			if o.Response != "" {
+				sawContent = true
 				if err := emit(Delta{Content: o.Response}); err != nil {
 					return &consumedError{err}
 				}
 			}
 			for _, tc := range o.ToolCalls {
 				sawTool = true
+				sawContent = true
 				d := ToolCallDelta{Index: tc.Index, ID: tc.ID}
 				if tc.FunctionCall != nil {
 					d.Name = tc.FunctionCall.Name
@@ -791,30 +799,32 @@ func (c *Client) consume(r io.Reader, onDelta func(Delta) error) error {
 				}
 			}
 
-		case "extra_info":
+		case event == "extra_info":
 			// T1：只取 model 做诊断，**绝不当正文**。
 			var x sseExtraInfo
 			if json.Unmarshal([]byte(data), &x) == nil && x.Model != "" {
 				upModel = x.Model
 			}
 
-		case "token_usage":
+		case event == "token_usage":
 			var u Usage
 			if json.Unmarshal([]byte(data), &u) == nil {
 				usage = &u
 			}
 
-		case "done":
+		case event == "done" || data == "[DONE]":
 			var d sseDone
-			if json.Unmarshal([]byte(data), &d) == nil {
+			if json.Unmarshal([]byte(data), &d) == nil && d.FinishReason != "" {
 				finish = d.FinishReason
 			}
+			break scanLoop
 
-		case "error":
+		case event == "error" || (event == "" && strings.Contains(data, `"code":`) && (strings.Contains(data, `"message"`) || strings.Contains(data, `"error"`))):
 			var e sseError
 			if json.Unmarshal([]byte(data), &e) == nil {
 				errEvent = &e
 			}
+			break scanLoop
 
 		default:
 			// metadata / timing_cost / queue_begin / queue_end /
@@ -838,11 +848,15 @@ func (c *Client) consume(r io.Reader, onDelta func(Delta) error) error {
 	}
 
 	if errEvent != nil {
-		return &consumedError{&UpstreamError{
+		upErr := &UpstreamError{
 			Status: 200, // 上游用 200 + error 事件表达错误
 			Body:   fmt.Sprintf(`{"code":%d,"message":%q}`, errEvent.Code, errEvent.Message),
 			Path:   "sse:error",
-		}}
+		}
+		if sawContent {
+			return &consumedError{upErr}
+		}
+		return upErr
 	}
 
 	// 实测陷阱：上游发出 tool_calls 时 finish_reason 仍是 "stop"，
