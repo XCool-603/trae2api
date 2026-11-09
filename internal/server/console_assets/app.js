@@ -417,6 +417,10 @@ function renderAccounts(accounts) {
     var revivable = a.disabled || a.cooling || a.breaker || a.degraded || Object.keys(a.model_cooling || {}).length > 0;
     var actions = '<div class="flex items-center justify-end gap-1.5">';
     actions += '<button onclick="testAccount(\'' + escapeHtml(uid) + '\')" title="发起连通性与额度测速探针" class="px-2 py-1 rounded-lg text-xs font-medium text-cyan-400 hover:text-cyan-300 hover:bg-cyan-500/10 border border-transparent hover:border-cyan-500/30 transition">测速</button>';
+    var isIntl = (a.realm && a.realm.indexOf('intl') >= 0) || (a.product && a.product.indexOf('intl') >= 0);
+    if (!isIntl) {
+      actions += '<button onclick="openInviteModal(\'' + escapeHtml(uid) + '\')" title="查看邀请码、兑换好友邀请码或领取新手礼" class="px-2 py-1 rounded-lg text-xs font-medium text-purple-400 hover:text-purple-300 hover:bg-purple-500/10 border border-transparent hover:border-purple-500/30 transition">福利</button>';
+    }
     actions += '<button onclick="setAccountProxy(\'' + escapeHtml(uid) + '\',\'' + escapeHtml(a.proxy || '') + '\')" title="配置该账号独立出口代理（HTTP/SOCKS5）" class="px-2 py-1 rounded-lg text-xs font-medium text-amber-400 hover:text-amber-300 hover:bg-amber-500/10 border border-transparent hover:border-amber-500/30 transition">代理</button>';
     if (revivable) {
       actions += '<button onclick="controlAccount(\'' + escapeHtml(uid) + '\',\'revive\')" title="清冷却 + 清熔断 + 清连败 + 清降权 + 清模型级冷却" class="px-2 py-1 rounded-lg text-xs font-medium text-amber-400 hover:text-amber-300 hover:bg-amber-500/10 border border-transparent hover:border-amber-500/30 transition">复活</button>';
@@ -659,6 +663,139 @@ async function runBatchSignin() {
     if (txt) txt.innerText = oldTxt;
   }
 }
+
+async function runClaimAllNewbie() {
+  var btn = $('btnClaimAllNewbie');
+  var txt = $('btnClaimAllNewbieText');
+  var oldTxt = txt ? txt.innerText : '一键领新手礼';
+  if (btn) btn.disabled = true;
+  if (txt) txt.innerText = '正在领取...';
+  toast('正在为所有国内账号一键领取新手与首发消息福利...', 'info');
+
+  try {
+    var r = await post('admin/accounts/claim-all-newbie');
+    var totalClaimed = 0;
+    var totalCredits = 0;
+    if (Array.isArray(r)) {
+      for (var i = 0; i < r.length; i++) {
+        var acct = r[i];
+        if (acct.results) {
+          for (var j = 0; j < acct.results.length; j++) {
+            if (acct.results[j].success) {
+              totalClaimed++;
+              totalCredits += (acct.results[j].credits || 0);
+            }
+          }
+        }
+      }
+    }
+    if (totalClaimed > 0) {
+      toast('🎉 新手福利领取成功！共完成 ' + totalClaimed + ' 项活动，到账 +' + totalCredits + ' 积分！', 'ok');
+    } else {
+      toast('所有国内账号均已领取过新手福利（不可重复领取）', 'ok');
+    }
+    await refreshData();
+  } catch (e) {
+    toast('领取新手福利失败：' + errText(e), 'err');
+  } finally {
+    if (btn) btn.disabled = false;
+    if (txt) txt.innerText = oldTxt;
+  }
+}
+
+var currentInviteUID = '';
+
+async function openInviteModal(uid) {
+  currentInviteUID = uid;
+  var elUID = $('inviteModalUID');
+  if (elUID) elUID.innerText = uid;
+  var elCode = $('inviteCodeVal');
+  if (elCode) elCode.innerText = '正在获取...';
+  var elUrl = $('inviteUrlVal');
+  if (elUrl) elUrl.value = '';
+  var elInfo = $('inviteRewardInfo');
+  if (elInfo) elInfo.innerText = '';
+  var elRes = $('inviteNewbieResult');
+  if (elRes) elRes.classList.add('hidden');
+  var elInput = $('inviteRedeemInput');
+  if (elInput) elInput.value = '';
+  show('inviteModal');
+
+  try {
+    var r = await api('admin/accounts/' + encodeURIComponent(uid) + '/invite-code');
+    if (r.invite_code) {
+      if (elCode) elCode.innerText = r.invite_code;
+      if (elUrl) elUrl.value = r.invite_url || '';
+      if (elInfo) elInfo.innerText = r.reward_credits > 0 ? ('每成功邀请 1 人可获 ' + r.reward_credits + ' 积分') : (r.message || '');
+    } else {
+      if (elCode) elCode.innerText = '未生成或不可用';
+      if (elInfo) elInfo.innerText = r.message || '上游返回无邀请资格';
+    }
+  } catch (e) {
+    if (elCode) elCode.innerText = '获取失败: ' + errText(e);
+  }
+}
+
+function closeInviteModal() {
+  hide('inviteModal');
+}
+
+async function claimSingleNewbie() {
+  if (!currentInviteUID) return;
+  var btn = $('btnClaimSingleNewbie');
+  if (btn) btn.disabled = true;
+  try {
+    var r = await post('admin/accounts/' + encodeURIComponent(currentInviteUID) + '/claim-newbie');
+    var details = [];
+    var total = 0;
+    if (r.results) {
+      for (var i = 0; i < r.results.length; i++) {
+        var it = r.results[i];
+        if (it.success) total += (it.credits || 0);
+        details.push(it.name + ': ' + (it.success ? ('+' + it.credits + ' 积分') : (it.message || '已领过')));
+      }
+    }
+    var resBox = $('inviteNewbieResult');
+    var resTxt = $('inviteNewbieResultText');
+    if (resBox && resTxt) {
+      resBox.classList.remove('hidden');
+      resTxt.innerText = '领取结果 (共 +' + total + ' 积分):\n' + details.join('\n');
+    }
+    toast('新手福利处理完毕' + (total > 0 ? ' (+' + total + ' 积分)' : ''), 'ok');
+    await refreshData();
+  } catch (e) {
+    toast('领取失败: ' + errText(e), 'err');
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+async function redeemSingleInvite() {
+  if (!currentInviteUID) return;
+  var input = $('inviteRedeemInput');
+  var code = (input ? input.value : '').trim();
+  if (!code) {
+    toast('请输入好友邀请码', 'warn');
+    return;
+  }
+  var btn = $('btnRedeemSingleInvite');
+  if (btn) btn.disabled = true;
+  try {
+    var r = await post('admin/accounts/' + encodeURIComponent(currentInviteUID) + '/redeem-invite', { invite_code: code });
+    if (r.ok) {
+      toast('🎉 兑换成功！获得 +' + (r.credits || 0) + ' 积分！', 'ok');
+      if (input) input.value = '';
+      await refreshData();
+    } else {
+      toast('兑换失败: ' + (r.message || '未知错误'), 'err');
+    }
+  } catch (e) {
+    toast('兑换失败: ' + errText(e), 'err');
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
 async function refreshCredits() {
   try {
     var r = await post('admin/credits/refresh');

@@ -31,13 +31,28 @@ type anthMessage struct {
 }
 
 type anthContentBlock struct {
-	Type      string         `json:"type"`
-	Text      string         `json:"text,omitempty"`
-	ID        string         `json:"id,omitempty"`
-	Name      string         `json:"name,omitempty"`
-	Input     map[string]any `json:"input,omitempty"`
-	ToolUseID string         `json:"tool_use_id,omitempty"`
-	Content   string         `json:"content,omitempty"`
+	Type      string          `json:"type"`
+	Text      string          `json:"text,omitempty"`
+	Source    json.RawMessage `json:"source,omitempty"`
+	ID        string          `json:"id,omitempty"`
+	Name      string          `json:"name,omitempty"`
+	Input     map[string]any  `json:"input,omitempty"`
+	ToolUseID string          `json:"tool_use_id,omitempty"`
+	Content   string          `json:"content,omitempty"`
+}
+
+func hasAnthropicImage(req *anthropicRequest) bool {
+	for _, m := range req.Messages {
+		var blocks []anthContentBlock
+		if err := json.Unmarshal(m.Content, &blocks); err == nil {
+			for _, b := range blocks {
+				if b.Type == "image" {
+					return true
+				}
+			}
+		}
+	}
+	return false
 }
 
 type anthTool struct {
@@ -63,6 +78,15 @@ func (s *Server) handleAnthropicMessages(w http.ResponseWriter, r *http.Request)
 	origModel := req.Model
 	if target, ok := s.cfg.ModelAliases[req.Model]; ok && target != "" {
 		req.Model = target
+	}
+
+	// 2. 检查内联图片输入（若未启用则明确拒绝，避免上游 4001 或静默丢图）
+	if s.cfg == nil || !s.cfg.Trae.VisionEnabled {
+		if hasAnthropicImage(&req) {
+			writeAnthropicError(w, http.StatusBadRequest, "invalid_request_error",
+				"当前上游不接受内联图片：Trae 的 chat 接口要求图片先上传到对象存储、再以 URI 引用，而本网关尚未实现该上传链路。已实测全部出站片段形态均被上游拒绝，仅纯文本可通。请改用文本描述，或在配置中开启 trae.vision_enabled。")
+			return
+		}
 	}
 
 	// 2. 租户配额与白名单检查
@@ -262,12 +286,24 @@ func (s *Server) runAnthropicNonStream(w http.ResponseWriter, ctx context.Contex
 	}
 
 	id := "msg_" + randHex(20)
+	var contentBlocks []any
+	if agg.Reasoning != "" {
+		contentBlocks = append(contentBlocks, map[string]any{
+			"type":     "thinking",
+			"thinking": agg.Reasoning,
+		})
+	}
+	contentBlocks = append(contentBlocks, map[string]any{
+		"type": "text",
+		"text": agg.Content,
+	})
+
 	resp := map[string]any{
 		"id":            id,
 		"type":          "message",
 		"role":          "assistant",
 		"model":         outModel,
-		"content":       []any{map[string]any{"type": "text", "text": agg.Content}},
+		"content":       contentBlocks,
 		"stop_reason":   "end_turn",
 		"stop_sequence": nil,
 		"usage": map[string]any{
@@ -323,6 +359,12 @@ func (s *Server) runAnthropicStream(w http.ResponseWriter, ctx context.Context, 
 	first := true
 	tokensUsed := int64(0)
 
+	nextIndex := 0
+	thinkingIndex := -1
+	thinkingClosed := false
+	textIndex := -1
+	textClosed := false
+
 	err := cl.Chat(ctx, creq, func(d traectl.Delta) error {
 		if d.Keepalive {
 			return nil
@@ -341,20 +383,49 @@ func (s *Server) runAnthropicStream(w http.ResponseWriter, ctx context.Context, 
 					"usage":   map[string]any{"input_tokens": 10, "output_tokens": 1},
 				},
 			})
-			sendEvent("content_block_start", map[string]any{
-				"type":          "content_block_start",
-				"index":         0,
-				"content_block": map[string]any{"type": "text", "text": ""},
+		}
+
+		if d.Reasoning != "" {
+			if thinkingIndex == -1 {
+				thinkingIndex = nextIndex
+				nextIndex++
+				sendEvent("content_block_start", map[string]any{
+					"type":          "content_block_start",
+					"index":         thinkingIndex,
+					"content_block": map[string]any{"type": "thinking", "thinking": ""},
+				})
+			}
+			sendEvent("content_block_delta", map[string]any{
+				"type":  "content_block_delta",
+				"index": thinkingIndex,
+				"delta": map[string]any{"type": "thinking_delta", "thinking": d.Reasoning},
 			})
 		}
 
 		if d.Content != "" {
+			if thinkingIndex != -1 && !thinkingClosed {
+				sendEvent("content_block_stop", map[string]any{
+					"type":  "content_block_stop",
+					"index": thinkingIndex,
+				})
+				thinkingClosed = true
+			}
+			if textIndex == -1 {
+				textIndex = nextIndex
+				nextIndex++
+				sendEvent("content_block_start", map[string]any{
+					"type":          "content_block_start",
+					"index":         textIndex,
+					"content_block": map[string]any{"type": "text", "text": ""},
+				})
+			}
 			sendEvent("content_block_delta", map[string]any{
 				"type":  "content_block_delta",
-				"index": 0,
+				"index": textIndex,
 				"delta": map[string]any{"type": "text_delta", "text": d.Content},
 			})
 		}
+
 		if d.Usage != nil {
 			usage = d.Usage
 		}
@@ -365,10 +436,33 @@ func (s *Server) runAnthropicStream(w http.ResponseWriter, ctx context.Context, 
 		if !headersWritten {
 			return err
 		}
+		sendEvent("error", map[string]any{
+			"type": "error",
+			"error": map[string]any{
+				"type":    "api_error",
+				"message": err.Error(),
+			},
+		})
 		return fmt.Errorf("%w: %w", errAlreadyStreaming, err)
 	}
 
-	sendEvent("content_block_stop", map[string]any{"type": "content_block_stop", "index": 0})
+	if thinkingIndex != -1 && !thinkingClosed {
+		sendEvent("content_block_stop", map[string]any{"type": "content_block_stop", "index": thinkingIndex})
+		thinkingClosed = true
+	}
+	if textIndex != -1 && !textClosed {
+		sendEvent("content_block_stop", map[string]any{"type": "content_block_stop", "index": textIndex})
+		textClosed = true
+	}
+	if nextIndex == 0 {
+		sendEvent("content_block_start", map[string]any{
+			"type":          "content_block_start",
+			"index":         0,
+			"content_block": map[string]any{"type": "text", "text": ""},
+		})
+		sendEvent("content_block_stop", map[string]any{"type": "content_block_stop", "index": 0})
+	}
+
 	outTokens := 10
 	inTokens := 10
 	if usage != nil {

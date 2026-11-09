@@ -187,7 +187,15 @@ func (s *Store) postUGWithRetry(ctx context.Context, path string, out any, allow
 	return s.postUGWithRetryDev(ctx, path, out, allowRefresh, "")
 }
 
+func (s *Store) postUGBody(ctx context.Context, path string, body []byte, out any) error {
+	return s.postUGWithRetryDevCustom(ctx, path, out, true, "", body)
+}
+
 func (s *Store) postUGWithRetryDev(ctx context.Context, path string, out any, allowRefresh bool, overrideDevID string) error {
+	return s.postUGWithRetryDevCustom(ctx, path, out, allowRefresh, overrideDevID, nil)
+}
+
+func (s *Store) postUGWithRetryDevCustom(ctx context.Context, path string, out any, allowRefresh bool, overrideDevID string, customBody []byte) error {
 	s.mu.Lock()
 	cred := s.Cred
 	deviceID := s.DeviceID
@@ -210,7 +218,10 @@ func (s *Store) postUGWithRetryDev(ctx context.Context, path string, out any, al
 		devID = randomNumericDeviceID()
 	}
 
-	bodyBytes := ugRequestBody(path)
+	bodyBytes := customBody
+	if len(bodyBytes) == 0 {
+		bodyBytes = ugRequestBody(path)
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, host+path, bytes.NewReader(bodyBytes))
 	if err != nil {
 		return fmt.Errorf("traectl: 构造 %s 请求: %w", path, err)
@@ -233,7 +244,7 @@ func (s *Store) postUGWithRetryDev(ctx context.Context, path string, out any, al
 	if resp.StatusCode == http.StatusUnauthorized && allowRefresh {
 		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<16))
 		if rerr := s.Refresh(ctx); rerr == nil {
-			return s.postUGWithRetryDev(ctx, path, out, false, overrideDevID)
+			return s.postUGWithRetryDevCustom(ctx, path, out, false, overrideDevID, customBody)
 		}
 	}
 

@@ -319,6 +319,11 @@ func (s *Server) handler() http.Handler {
 	mux.HandleFunc("POST /admin/accounts/{uid}/enable", s.withAuth(s.handleSetDisabled(false)))
 	mux.HandleFunc("POST /admin/accounts/{uid}/test", s.withAuth(s.handleAccountTest))
 	mux.HandleFunc("POST /admin/accounts/{uid}/proxy", s.withAuth(s.handleAccountProxy))
+	// 邀请码与新手/活动福利
+	mux.HandleFunc("GET /admin/accounts/{uid}/invite-code", s.withAuth(s.handleAccountInviteCode))
+	mux.HandleFunc("POST /admin/accounts/{uid}/redeem-invite", s.withAuth(s.handleAccountRedeemInvite))
+	mux.HandleFunc("POST /admin/accounts/{uid}/claim-newbie", s.withAuth(s.handleAccountClaimNewbie))
+	mux.HandleFunc("POST /admin/accounts/claim-all-newbie", s.withAuth(s.handleAccountsClaimAllNewbie))
 	// OAuth 一键登录
 	mux.HandleFunc("POST /admin/login/start", s.withAuth(s.handleLoginStart))
 	mux.HandleFunc("GET /admin/login/status", s.withAuth(s.handleLoginStatus))

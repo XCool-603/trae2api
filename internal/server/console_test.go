@@ -249,6 +249,12 @@ var frozenContract = []routeProbe{
 	{"GET", "admin/dsh/export", "契约C"},
 	{"GET", "admin/system/update/check", "契约C"},
 	{"POST", "admin/system/update/apply", "契约D"},
+
+	// ---- 契约 E：邀请码与福利体系 ----
+	{"GET", "admin/accounts/probe-uid/invite-code", "契约E"},
+	{"POST", "admin/accounts/probe-uid/redeem-invite", "契约E"},
+	{"POST", "admin/accounts/probe-uid/claim-newbie", "契约E"},
+	{"POST", "admin/accounts/claim-all-newbie", "契约E"},
 }
 
 // consoleDynamicOverrides 处理"动态段其实是枚举值"的调用点。

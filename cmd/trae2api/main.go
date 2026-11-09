@@ -33,6 +33,7 @@ import (
 
 	"trae2api/internal/cmd/acct"
 	"trae2api/internal/cmd/credit"
+	"trae2api/internal/cmd/invite"
 	"trae2api/internal/cmd/login"
 	"trae2api/internal/cmd/models"
 	cmdsrv "trae2api/internal/cmd/server"
@@ -82,6 +83,8 @@ func dispatch(args []string) int {
 		return models.Run(rest)
 	case "signin", "checkin":
 		return signin.Run(rest)
+	case "invite":
+		return invite.Run(rest)
 	case "login", "signin-oauth", "auth":
 		return login.Run(rest)
 	case "stats", "stat", "monitor":
@@ -108,6 +111,7 @@ func usage(w *os.File) {
   credit     额度查询（-refresh 强制实时刷新）
   models     模型清单（-multimodal 只看多模态）
   signin     每日签到（领取积分）
+  invite     邀请与福利（查邀请码 / -redeem 兑换 / -newbie 领新手礼）
   login      OAuth 一键授权（-product trae-cn / solo-cn / trae-intl / solo-intl）
   stats      实时统计 TUI（-once 打印一次后退出）
   version    显示版本
